@@ -1,0 +1,80 @@
+/* ═══════════════════════════════════════════════════════
+   Camera Management Page
+   ═══════════════════════════════════════════════════════ */
+
+.cameras-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+}
+
+.create-camera-form {
+  display: flex;
+  gap: var(--space-md);
+}
+
+.create-camera-form .form-input {
+  flex: 1;
+}
+
+/* ── Camera Table ───────────────────────────────────── */
+.camera-table-wrapper {
+  overflow-x: auto;
+}
+
+.camera-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-sm);
+}
+
+.camera-table th {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: var(--font-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.camera-table td {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+}
+
+.camera-table tbody tr {
+  transition: background var(--transition-fast);
+}
+
+.camera-table tbody tr:hover {
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.camera-table__name {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.camera-table__id code {
+  font-size: var(--font-xs);
+  background: var(--bg-input);
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+}
+
+.camera-table__date {
+  color: var(--text-muted);
+}
+
+@media (max-width: 640px) {
+  .create-camera-form {
+    flex-direction: column;
+  }
+}

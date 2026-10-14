@@ -1,0 +1,48 @@
+/* ═══════════════════════════════════════════════════════
+   Live Monitoring Page
+   ═══════════════════════════════════════════════════════ */
+
+.monitoring-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xl);
+}
+
+.monitoring-placeholder {
+  min-height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.monitoring-placeholder__icon {
+  width: 80px;
+  height: 80px;
+  border-radius: var(--radius-full);
+  background: var(--accent-primary-glow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-primary);
+  margin-bottom: var(--space-md);
+}
+
+.monitoring-features {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+  margin-bottom: var(--space-md);
+}
+
+.monitoring-feature {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  padding: 0.5rem 1rem;
+  background: var(--bg-input);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
