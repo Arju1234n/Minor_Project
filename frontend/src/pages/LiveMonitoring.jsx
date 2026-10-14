@@ -19,8 +19,9 @@ import {
   HiOutlineArrowNarrowUp,
   HiOutlineArrowNarrowDown,
   HiOutlineBadgeCheck,
+  HiOutlineIdentification,
 } from 'react-icons/hi';
-import { cameraAPI, dashboardAPI, aiAPI, settingsAPI } from '../services/api';
+import { cameraAPI, dashboardAPI, aiAPI, settingsAPI, studentAPI } from '../services/api';
 import { getSocket, fetchIceServers, DEFAULT_ICE_SERVERS } from '../services/webrtc';
 import './LiveMonitoring.css';
 
@@ -75,6 +76,13 @@ export default function LiveMonitoring() {
   const [showZone, setShowZone] = useState(false);
   const [confThreshold, setConfThreshold] = useState(0.40);
   const [tripwireY, setTripwireY] = useState(0.50);
+
+  // ── Phase 5: Face Recognition Overlays & Real-Time Roster ──
+  const [showRecognitionNames, setShowRecognitionNames] = useState(true);
+  const [recognizedCount, setRecognizedCount] = useState(0);
+  const [unrecognizedCount, setUnrecognizedCount] = useState(0);
+  const [recognizedStudents, setRecognizedStudents] = useState([]);
+  const lastRecognizedLogRef = useRef(new Map()); // studentId -> lastLoggedTime
 
   // Real-time tracking counters
   const [peopleCount, setPeopleCount] = useState(0);
@@ -429,14 +437,17 @@ export default function LiveMonitoring() {
 
     // 4. Draw Bounding Boxes and Tracking ID Badges
     if (showBoxes) {
+      const scaleX = w / (video.videoWidth || 640);
+      const scaleY = h / (video.videoHeight || 360);
+
       detections.forEach((det) => {
         const id = det.tracking_id || 1;
         const color = getTrackingColor(id);
 
-        let x = det.bbox.x;
-        let y = det.bbox.y;
-        let boxW = det.bbox.width;
-        let boxH = det.bbox.height;
+        let x = det.bbox.x * scaleX;
+        let y = det.bbox.y * scaleY;
+        let boxW = det.bbox.width * scaleX;
+        let boxH = det.bbox.height * scaleY;
 
         if (det.normalized_bbox) {
           x = det.normalized_bbox.x * w;
@@ -446,12 +457,17 @@ export default function LiveMonitoring() {
         }
 
         const confPercent = Math.round((det.confidence || 0) * 100);
+        const isRecognized = det.identity_status === 'recognized';
+        const isUncertain = det.identity_status === 'uncertain';
+        const isUnknown = det.identity_status === 'unknown';
 
         ctx.save();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2.5;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 8;
+        // High-tech person bounding box with glow
+        const strokeColor = isRecognized ? '#10b981' : color;
+        ctx.strokeStyle = strokeColor;
+        ctx.lineWidth = isRecognized ? 3 : 2.5;
+        ctx.shadowColor = strokeColor;
+        ctx.shadowBlur = isRecognized ? 10 : 6;
 
         ctx.beginPath();
         if (ctx.roundRect) ctx.roundRect(x, y, boxW, boxH, 6);
@@ -460,28 +476,61 @@ export default function LiveMonitoring() {
 
         ctx.shadowBlur = 0;
 
-        // Tracking ID + Confidence Badge
+        // Draw detected Face Box bracket if present
+        if (det.face_box) {
+          const fx = det.face_box.x * scaleX;
+          const fy = det.face_box.y * scaleY;
+          const fw = det.face_box.width * scaleX;
+          const fh = det.face_box.height * scaleY;
+
+          ctx.strokeStyle = isRecognized ? '#34d399' : '#38bdf8';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(fx, fy, fw, fh, 4);
+          else ctx.rect(fx, fy, fw, fh);
+          ctx.stroke();
+        }
+
+        // Tracking ID + Biometric Recognition Name Badge
         if (showConfidence) {
-          const tagText = `ID #${id} (${confPercent}%)`;
+          let tagText = `ID #${id} (${confPercent}%)`;
+          let tagBg = color;
+          let textColor = '#0f172a';
+
+          if (showRecognitionNames && isRecognized) {
+            const simScore = Math.round((det.similarity || 0) * 100);
+            tagText = `✓ ${det.label} [${simScore}%]`;
+            tagBg = '#10b981';
+            textColor = '#ffffff';
+          } else if (showRecognitionNames && isUncertain) {
+            tagText = `? ID #${id} • Uncertain [${Math.round((det.similarity || 0) * 100)}%]`;
+            tagBg = '#f59e0b';
+            textColor = '#0f172a';
+          } else if (showRecognitionNames && isUnknown) {
+            tagText = `ID #${id} • Unknown (${confPercent}%)`;
+            tagBg = '#6366f1';
+            textColor = '#ffffff';
+          }
+
           ctx.font = 'bold 11px Inter, system-ui, sans-serif';
           const textMetrics = ctx.measureText(tagText);
-          const tagW = textMetrics.width + 12;
-          const tagH = 20;
+          const tagW = textMetrics.width + 16;
+          const tagH = 22;
           const tagY = Math.max(0, y - tagH);
 
-          ctx.fillStyle = color;
+          ctx.fillStyle = tagBg;
           ctx.beginPath();
-          if (ctx.roundRect) ctx.roundRect(x, tagY, tagW, tagH, [4, 4, 0, 0]);
+          if (ctx.roundRect) ctx.roundRect(x, tagY, tagW, tagH, [5, 5, 0, 0]);
           else ctx.fillRect(x, tagY, tagW, tagH);
           ctx.fill();
 
-          ctx.fillStyle = '#0f172a';
-          ctx.fillText(tagText, x + 6, tagY + 14);
+          ctx.fillStyle = textColor;
+          ctx.fillText(tagText, x + 8, tagY + 15);
         }
         ctx.restore();
       });
     }
-  }, [showBoxes, showConfidence, showTrails, showTripwire, showZone, tripwireY, tripwireEntered, tripwireExited, zoneCount]);
+  }, [showBoxes, showConfidence, showTrails, showTripwire, showZone, tripwireY, tripwireEntered, tripwireExited, zoneCount, showRecognitionNames]);
 
   // Re-render canvas overlays if settings change
   useEffect(() => {
@@ -543,6 +592,17 @@ export default function LiveMonitoring() {
             setZoneCount(data.zone.inside_count);
           }
 
+          // ── Phase 5: Face Recognition Telemetry & Audit Events ──
+          if (data.recognized_count !== undefined) {
+            setRecognizedCount(data.recognized_count);
+          }
+          if (data.unrecognized_count !== undefined) {
+            setUnrecognizedCount(data.unrecognized_count);
+          }
+          if (data.recognized_students) {
+            setRecognizedStudents(data.recognized_students);
+          }
+
           drawDetections(detections);
 
           // Periodically log tracking event into MongoDB
@@ -560,9 +620,31 @@ export default function LiveMonitoring() {
                 trackingId: d.tracking_id || 1,
                 confidence: d.confidence,
                 bbox: d.bbox,
+                studentId: d.student_id,
+                identityStatus: d.identity_status,
+                label: d.label,
+                similarity: d.similarity,
               })),
             }).catch(() => {});
           }
+
+          // Debounced audit logging of recognized students
+          detections.forEach((d) => {
+            if (d.identity_status === 'recognized' && d.student_id) {
+              const lastLogged = lastRecognizedLogRef.current.get(d.student_id) || 0;
+              if (now - lastLogged > 30000) {
+                lastRecognizedLogRef.current.set(d.student_id, now);
+                studentAPI.recordRecognitionEvent({
+                  sessionId: selectedSessionId || 'default',
+                  studentId: d.student_id,
+                  trackingId: d.tracking_id,
+                  confidence: d.similarity || 0,
+                  bbox: d.bbox,
+                  status: 'recognized',
+                }).catch(() => {});
+              }
+            }
+          });
         }
       } catch (err) {
         console.warn('ByteTrack inference error:', err.message);
@@ -738,6 +820,17 @@ export default function LiveMonitoring() {
                     <strong>{peopleCount}</strong> IN VIEW
                   </div>
                 )}
+                {aiEnabled && (
+                  <div className="hud-badge recognized-hud-badge">
+                    <HiOutlineIdentification size={14} />
+                    <strong>{recognizedCount}</strong> RECOGNIZED
+                  </div>
+                )}
+                {aiEnabled && unrecognizedCount > 0 && (
+                  <div className="hud-badge unrecognized-hud-badge">
+                    <span>{unrecognizedCount} UNKNOWN</span>
+                  </div>
+                )}
                 {aiEnabled && enableTracking && (
                   <div className="hud-badge unique-badge">
                     <HiOutlineBadgeCheck size={14} />
@@ -875,6 +968,14 @@ export default function LiveMonitoring() {
                 />
                 Show Monitored Zone
               </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showRecognitionNames}
+                  onChange={(e) => setShowRecognitionNames(e.target.checked)}
+                />
+                Show Student Name Badges
+              </label>
             </div>
 
             {/* Session Tracking KPI Metrics */}
@@ -884,15 +985,23 @@ export default function LiveMonitoring() {
                 <span className="metric-val text-success">{peopleCount}</span>
               </div>
               <div className="metric-box">
-                <span className="metric-title">Total Unique IDs</span>
+                <span className="metric-title">Identified</span>
+                <span className="metric-val text-emerald">{recognizedCount}</span>
+              </div>
+              <div className="metric-box">
+                <span className="metric-title">Unidentified</span>
+                <span className="metric-val text-warning">{unrecognizedCount}</span>
+              </div>
+              <div className="metric-box">
+                <span className="metric-title">Unique IDs</span>
                 <span className="metric-val text-info">{uniqueIdsCount}</span>
               </div>
               <div className="metric-box">
-                <span className="metric-title">Line Crossed (In)</span>
+                <span className="metric-title">Crossed (In)</span>
                 <span className="metric-val text-warning">{tripwireEntered}</span>
               </div>
               <div className="metric-box">
-                <span className="metric-title">Line Crossed (Out)</span>
+                <span className="metric-title">Crossed (Out)</span>
                 <span className="metric-val text-danger">{tripwireExited}</span>
               </div>
             </div>
@@ -906,6 +1015,47 @@ export default function LiveMonitoring() {
             >
               <HiOutlineRefresh size={14} /> Reset Session Tracking
             </button>
+          </div>
+
+          {/* Phase 5: Live Recognized Students Roster Card */}
+          <div className="glass-card live-roster-card">
+            <div className="sidebar-card-header-flex">
+              <h3 className="sidebar-card-title">
+                <HiOutlineBadgeCheck size={18} /> Identified Students ({recognizedStudents.length})
+              </h3>
+              <span className="live-status-pill">
+                <span className="live-dot" /> LIVE
+              </span>
+            </div>
+
+            {recognizedStudents.length === 0 ? (
+              <div className="empty-roster-state">
+                <p>No enrolled students currently identified in camera view.</p>
+                <span className="empty-roster-hint">Ensure smartphone camera is pointed at attendees.</span>
+              </div>
+            ) : (
+              <div className="live-roster-list">
+                {recognizedStudents.map((st, idx) => (
+                  <div key={st.student_id || idx} className="roster-item">
+                    <div className="roster-item-avatar">
+                      {st.full_name ? st.full_name.charAt(0) : 'S'}
+                    </div>
+                    <div className="roster-item-info">
+                      <span className="roster-item-name">{st.full_name}</span>
+                      <div className="roster-item-meta">
+                        <span className="roster-roll">{st.roll_number}</span>
+                        <span className="roster-track-id">Track #{st.tracking_id}</span>
+                      </div>
+                    </div>
+                    <div className="roster-item-score">
+                      <span className="score-badge">
+                        {Math.round((st.similarity || 0) * 100)}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Active Session Switcher Card */}

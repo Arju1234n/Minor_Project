@@ -198,5 +198,14 @@ export const studentAPI = {
       method: 'DELETE',
     }),
   getActiveGallery: () => request('/students/active-gallery'),
+  getRecognitionEvents: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/students/recognition-events${query ? `?${query}` : ''}`);
+  },
+  recordRecognitionEvent: (eventData) =>
+    request('/students/recognition-events', {
+      method: 'POST',
+      body: JSON.stringify(eventData),
+    }),
 };
 

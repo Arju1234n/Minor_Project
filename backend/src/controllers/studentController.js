@@ -1,5 +1,6 @@
 const Student = require('../models/Student');
 const FaceEmbedding = require('../models/FaceEmbedding');
+const RecognitionEvent = require('../models/RecognitionEvent');
 const fs = require('fs');
 const path = require('path');
 
@@ -693,4 +694,68 @@ const syncGalleryToAIService = async () => {
   }
 };
 exports.syncGalleryToAIService = syncGalleryToAIService;
+
+/**
+ * ── Phase 5: Query Recognition Audit Events ───────────────────
+ * GET /api/students/recognition-events
+ */
+exports.getRecognitionEvents = async (req, res) => {
+  try {
+    const { sessionId, studentId, limit = 50, status } = req.query;
+    const filter = {};
+    if (sessionId) filter.sessionId = sessionId;
+    if (studentId) filter.studentId = studentId;
+    if (status) filter.status = status;
+
+    const events = await RecognitionEvent.find(filter)
+      .sort({ timestamp: -1 })
+      .limit(parseInt(limit, 10))
+      .populate('studentId', 'fullName rollNumber department className')
+      .lean();
+
+    res.json({
+      success: true,
+      count: events.length,
+      events,
+    });
+  } catch (err) {
+    console.error('getRecognitionEvents error:', err);
+    res.status(500).json({ success: false, message: 'Server error retrieving recognition events' });
+  }
+};
+
+/**
+ * Record a single recognition event and broadcast in real-time
+ * POST /api/students/recognition-events
+ */
+exports.recordRecognitionEvent = async (req, res) => {
+  try {
+    const { sessionId, studentId, trackingId, confidence, bbox, status } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ success: false, message: 'sessionId is required' });
+    }
+
+    const event = await RecognitionEvent.create({
+      sessionId,
+      studentId: studentId || undefined,
+      trackingId,
+      confidence: confidence || 0,
+      bbox,
+      status: status || 'recognized',
+      timestamp: new Date(),
+    });
+
+    const populatedEvent = await event.populate('studentId', 'fullName rollNumber department className');
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`session:${sessionId}`).emit('student-recognized', populatedEvent);
+    }
+
+    res.status(201).json({ success: true, event: populatedEvent });
+  } catch (err) {
+    console.error('recordRecognitionEvent error:', err);
+    res.status(500).json({ success: false, message: 'Server error recording recognition event' });
+  }
+};
 
