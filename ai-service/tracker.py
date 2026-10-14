@@ -4,10 +4,13 @@ import numpy as np
 import cv2
 from ultralytics import YOLO
 
+from recognition_service import gallery
+
 class SessionTracker:
     """
     ByteTrack Multi-Person Tracker with Trajectory History,
-    Virtual Tripwire Line Crossing, and Zone Occupancy Counting.
+    Virtual Tripwire Line Crossing, Zone Occupancy Counting,
+    and Integrated Facial Recognition against the Student Gallery.
     """
     def __init__(self, session_id: str, model_name: str = "yolov8n.pt", default_conf: float = 0.40):
         self.session_id = session_id
@@ -33,8 +36,12 @@ class SessionTracker:
         self.zone_rect = {"x1": 0.2, "y1": 0.2, "x2": 0.8, "y2": 0.8}
         self.zone_inside_count: int = 0
 
+        # Phase 4: Biometric track identity cache
+        self.track_identities: Dict[int, Dict[str, Any]] = {}
+        self.frame_counter: int = 0
+
     def reset(self):
-        """Reset session tracking history and counters"""
+        """Reset session tracking history, counters, and identity cache"""
         self.trajectories.clear()
         self.unique_ids.clear()
         self.tripwire_positions.clear()
@@ -42,6 +49,8 @@ class SessionTracker:
         self.count_entered = 0
         self.count_exited = 0
         self.zone_inside_count = 0
+        self.track_identities.clear()
+        self.frame_counter = 0
 
     def update_tripwire_y(self, y: float):
         self.tripwire_y = max(0.05, min(0.95, y))
@@ -62,6 +71,8 @@ class SessionTracker:
             self.update_tripwire_y(tripwire_y)
 
         h, w = frame.shape[:2]
+
+        self.frame_counter += 1
 
         # Run ByteTrack multi-person tracking
         results = self.model.track(
@@ -129,6 +140,98 @@ class SessionTracker:
 
                 self.tripwire_positions[tracking_id] = current_pos
 
+                # ── Phase 4: Biometric Face Recognition on Tracked Person ──
+                cached = self.track_identities.get(tracking_id)
+                need_recognition = False
+
+                if cached is None:
+                    need_recognition = True
+                elif cached.get("identity_status") == "recognized":
+                    # If already confidently recognized, re-check every 25 frames
+                    if (self.frame_counter - cached.get("last_checked_frame", 0)) >= 25:
+                        need_recognition = True
+                else:
+                    # If unknown, uncertain, or no face detected, retry every 6 frames
+                    if (self.frame_counter - cached.get("last_checked_frame", 0)) >= 6:
+                        need_recognition = True
+
+                if need_recognition:
+                    # Crop upper torso / head region (upper 50% of detected person)
+                    head_y1 = max(0, y1)
+                    head_y2 = min(h, y1 + max(int(bbox_h * 0.50), 40))
+                    head_x1 = max(0, x1)
+                    head_x2 = min(w, x2)
+
+                    crop_h = head_y2 - head_y1
+                    crop_w = head_x2 - head_x1
+
+                    if crop_h >= 25 and crop_w >= 25:
+                        head_crop = frame[head_y1:head_y2, head_x1:head_x2]
+                        rec_res = gallery.recognize_crop(head_crop)
+                        status = rec_res.get("status", "unknown")
+
+                        if status == "recognized":
+                            id_status = "recognized"
+                            label = rec_res.get("label", "Recognized Student")
+                        elif status == "uncertain":
+                            id_status = "uncertain"
+                            label = rec_res.get("label", "Uncertain Match")
+                        elif status == "no_face":
+                            id_status = "unavailable"
+                            label = "Identity unavailable"
+                        else:
+                            id_status = "unknown"
+                            label = "Unknown"
+
+                        face_box = None
+                        if rec_res.get("face_box"):
+                            fb = rec_res["face_box"]
+                            face_box = {
+                                "x": head_x1 + fb["x"],
+                                "y": head_y1 + fb["y"],
+                                "width": fb["width"],
+                                "height": fb["height"],
+                            }
+
+                        # If previously recognized and current frame had poor angle/no face, preserve recognized identity
+                        if cached and cached.get("identity_status") == "recognized" and id_status in ("unavailable", "uncertain"):
+                            identity_info = {
+                                "identity_status": "recognized",
+                                "label": cached["label"],
+                                "student_id": cached["student_id"],
+                                "full_name": cached["full_name"],
+                                "roll_number": cached["roll_number"],
+                                "similarity": cached["similarity"],
+                                "face_box": face_box or cached.get("face_box"),
+                                "last_checked_frame": self.frame_counter,
+                            }
+                        else:
+                            identity_info = {
+                                "identity_status": id_status,
+                                "label": label,
+                                "student_id": rec_res.get("student_id"),
+                                "full_name": rec_res.get("full_name"),
+                                "roll_number": rec_res.get("roll_number"),
+                                "similarity": rec_res.get("score", 0.0),
+                                "face_box": face_box,
+                                "last_checked_frame": self.frame_counter,
+                            }
+
+                        self.track_identities[tracking_id] = identity_info
+                    else:
+                        identity_info = cached or {
+                            "identity_status": "unavailable",
+                            "label": "Identity unavailable",
+                            "student_id": None,
+                            "full_name": None,
+                            "roll_number": None,
+                            "similarity": 0.0,
+                            "face_box": None,
+                            "last_checked_frame": self.frame_counter,
+                        }
+                else:
+                    identity_info = cached
+
                 detections.append({
                     "tracking_id": tracking_id,
                     "class": "person",
@@ -141,15 +244,37 @@ class SessionTracker:
                     },
                     "normalized_bbox": norm_bbox,
                     "centroid": {"x": norm_cx, "y": norm_cy},
-                    "trajectory": list(self.trajectories[tracking_id])
+                    "trajectory": list(self.trajectories[tracking_id]),
+                    # Recognition metadata
+                    "identity_status": identity_info["identity_status"],
+                    "label": identity_info["label"],
+                    "student_id": identity_info["student_id"],
+                    "full_name": identity_info["full_name"],
+                    "roll_number": identity_info["roll_number"],
+                    "similarity": identity_info["similarity"],
+                    "face_box": identity_info.get("face_box"),
                 })
 
         self.zone_inside_count = zone_count
+
+        recognized_students = [
+            {
+                "student_id": d["student_id"],
+                "full_name": d["full_name"],
+                "roll_number": d["roll_number"],
+                "similarity": d["similarity"],
+                "tracking_id": d["tracking_id"]
+            }
+            for d in detections if d.get("identity_status") == "recognized"
+        ]
 
         return {
             "session_id": self.session_id,
             "people_count": len(detections),
             "unique_ids_count": len(self.unique_ids),
+            "recognized_count": len(recognized_students),
+            "unrecognized_count": len(detections) - len(recognized_students),
+            "recognized_students": recognized_students,
             "active_tracking_ids": active_ids,
             "tripwire": {
                 "entered": self.count_entered,

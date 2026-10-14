@@ -33,6 +33,21 @@ app.add_middleware(
 detector: Optional[HumanDetector] = None
 tracker_registry: Optional[TrackerRegistry] = None
 
+def sync_gallery_from_backend():
+    try:
+        import urllib.request
+        import json
+        req = urllib.request.Request("http://localhost:5000/api/students/active-gallery")
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("success") and "gallery" in data:
+                count = gallery.sync_students(data["gallery"])
+                print(f"✅ Auto-synced gallery from backend: {count} student(s) loaded into vector index.")
+                return count
+    except Exception as e:
+        print(f"ℹ️ Backend gallery auto-sync notice: {e}")
+        return 0
+
 @app.on_event("startup")
 def startup_event():
     global detector, tracker_registry
@@ -40,7 +55,17 @@ def startup_event():
     default_conf = float(os.getenv("DETECTION_CONFIDENCE", "0.40"))
     detector = HumanDetector(model_name=model_name, default_conf=default_conf)
     tracker_registry = TrackerRegistry(model_name=model_name)
-    print("🚀 AI Service startup complete. YOLOv8 and ByteTrack ready.")
+    sync_gallery_from_backend()
+    print("🚀 AI Service startup complete. YOLOv8, ByteTrack, and Facial Recognition ready.")
+
+@app.post("/api/ai/sync-gallery-from-backend")
+def trigger_sync_from_backend():
+    count = sync_gallery_from_backend()
+    return {
+        "success": True,
+        "synced_count": count,
+        "gallery_status": gallery.get_status()
+    }
 
 class Base64FramePayload(BaseModel):
     image: str # Base64 encoded JPEG/PNG frame
@@ -108,11 +133,76 @@ async def detect_base64_frame(payload: Base64FramePayload):
                 conf_threshold=payload.conf_threshold,
                 draw_boxes=False
             )
+            h, w = frame.shape[:2]
+            for idx, d in enumerate(detections):
+                x = d["bbox"]["x"]
+                y = d["bbox"]["y"]
+                bw = d["bbox"]["width"]
+                bh = d["bbox"]["height"]
+                head_y1 = max(0, y)
+                head_y2 = min(h, y + max(int(bh * 0.50), 40))
+                head_x1 = max(0, x)
+                head_x2 = min(w, x + bw)
+                if (head_y2 - head_y1) >= 25 and (head_x2 - head_x1) >= 25:
+                    head_crop = frame[head_y1:head_y2, head_x1:head_x2]
+                    rec_res = gallery.recognize_crop(head_crop)
+                    status = rec_res.get("status", "unknown")
+                    if status == "recognized":
+                        id_status = "recognized"
+                        label = rec_res.get("label", "Recognized Student")
+                    elif status == "uncertain":
+                        id_status = "uncertain"
+                        label = rec_res.get("label", "Uncertain Match")
+                    elif status == "no_face":
+                        id_status = "unavailable"
+                        label = "Identity unavailable"
+                    else:
+                        id_status = "unknown"
+                        label = "Unknown"
+                    d["identity_status"] = id_status
+                    d["label"] = label
+                    d["student_id"] = rec_res.get("student_id")
+                    d["full_name"] = rec_res.get("full_name")
+                    d["roll_number"] = rec_res.get("roll_number")
+                    d["similarity"] = rec_res.get("score", 0.0)
+                    if rec_res.get("face_box"):
+                        fb = rec_res["face_box"]
+                        d["face_box"] = {
+                            "x": head_x1 + fb["x"],
+                            "y": head_y1 + fb["y"],
+                            "width": fb["width"],
+                            "height": fb["height"],
+                        }
+                    else:
+                        d["face_box"] = None
+                else:
+                    d["identity_status"] = "unavailable"
+                    d["label"] = "Identity unavailable"
+                    d["student_id"] = None
+                    d["full_name"] = None
+                    d["roll_number"] = None
+                    d["similarity"] = 0.0
+                    d["face_box"] = None
+
+            recognized_students = [
+                {
+                    "student_id": d["student_id"],
+                    "full_name": d["full_name"],
+                    "roll_number": d["roll_number"],
+                    "similarity": d["similarity"],
+                    "tracking_id": idx + 1
+                }
+                for idx, d in enumerate(detections) if d.get("identity_status") == "recognized"
+            ]
+
             return {
                 "success": True,
                 "session_id": session_id,
                 "people_count": len(detections),
                 "unique_ids_count": len(detections),
+                "recognized_count": len(recognized_students),
+                "unrecognized_count": len(detections) - len(recognized_students),
+                "recognized_students": recognized_students,
                 "detections": detections,
                 "inference_time_ms": inf_time,
                 "image_size": {"width": frame.shape[1], "height": frame.shape[0]}

@@ -501,6 +501,9 @@ exports.enrollStudentFace = async (req, res) => {
     student.enrolledFaceCount = embeddingDocs.length;
     await student.save();
 
+    // Asynchronously update AI microservice vector gallery
+    syncGalleryToAIService().catch(() => {});
+
     res.json({
       success: true,
       message: `Successfully enrolled ${embeddingDocs.length} face photograph(s) for "${student.fullName}".`,
@@ -532,6 +535,9 @@ exports.deleteStudentEnrollment = async (req, res) => {
     student.enrollmentStatus = 'pending';
     student.enrolledFaceCount = 0;
     await student.save();
+
+    // Asynchronously update AI microservice vector gallery
+    syncGalleryToAIService().catch(() => {});
 
     res.json({
       success: true,
@@ -626,4 +632,65 @@ exports.getActiveGallery = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error retrieving student gallery' });
   }
 };
+
+/**
+ * Helper to push active student biometric gallery directly to AI microservice
+ */
+const syncGalleryToAIService = async () => {
+  try {
+    const students = await Student.find({ status: 'active', enrollmentStatus: 'enrolled' })
+      .select('_id fullName rollNumber department className')
+      .lean();
+
+    if (!students.length) {
+      await fetch(`${AI_SERVICE_URL}/api/ai/sync-gallery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ students: [] }),
+      }).catch(() => {});
+      return 0;
+    }
+
+    const studentIds = students.map((s) => s._id);
+    const embeddings = await FaceEmbedding.find({
+      studentId: { $in: studentIds },
+      isActive: true,
+    }).lean();
+
+    const studentMap = {};
+    students.forEach((s) => {
+      studentMap[s._id.toString()] = {
+        student_id: s._id.toString(),
+        full_name: s.fullName,
+        roll_number: s.rollNumber,
+        department: s.department,
+        class_name: s.className,
+        embeddings: [],
+      };
+    });
+
+    embeddings.forEach((emb) => {
+      const sid = emb.studentId.toString();
+      if (studentMap[sid]) {
+        studentMap[sid].embeddings.push(emb.embedding);
+      }
+    });
+
+    const galleryPayload = Object.values(studentMap).filter((s) => s.embeddings.length > 0);
+
+    const res = await fetch(`${AI_SERVICE_URL}/api/ai/sync-gallery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ students: galleryPayload }),
+    });
+    if (res.ok) {
+      console.log(`📡 Synced ${galleryPayload.length} students with AI Service gallery`);
+    }
+    return galleryPayload.length;
+  } catch (err) {
+    console.warn('Auto sync gallery notice:', err.message);
+    return 0;
+  }
+};
+exports.syncGalleryToAIService = syncGalleryToAIService;
 

@@ -103,11 +103,16 @@ setupWebRTCSignaling(io);
 // Start server
 // ──────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
+const { syncGalleryToAIService } = require('./controllers/studentController');
 
 const startServer = async () => {
   await connectDB();
-  server.listen(PORT, () => {
+  server.listen(PORT, async () => {
     console.log(`🚀 Backend running on http://localhost:${PORT}`);
+    // Prime the AI service face gallery on startup
+    syncGalleryToAIService().catch((err) => {
+      console.warn('Startup gallery sync notice:', err.message);
+    });
   });
 };
 
