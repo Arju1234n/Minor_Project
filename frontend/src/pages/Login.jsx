@@ -127,9 +127,24 @@ export default function Login() {
           </button>
         </form>
 
-        <p className="login-footer-text">
-          Default credentials: <strong>admin@smartclassroom.ai</strong> / <strong>admin123</strong>
-        </p>
+        <div
+          className="login-footer-text"
+          style={{ cursor: 'pointer', textAlign: 'center', marginTop: '16px' }}
+          onClick={() => {
+            setEmail('admin@smartclassroom.ai');
+            setPassword('admin123');
+            setError('');
+          }}
+          title="Click to fill default credentials"
+        >
+          <span>Default credentials: </span>
+          <span style={{ color: 'var(--primary-light, #818cf8)', textDecoration: 'underline' }}>
+            admin@smartclassroom.ai / admin123
+          </span>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+            (Click here to auto-fill)
+          </div>
+        </div>
       </div>
     </div>
   );
