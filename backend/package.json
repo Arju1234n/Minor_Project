@@ -11,7 +11,9 @@
     "test:enrollment": "node src/tests/test_face_enrollment.js",
     "test:recognition": "node -e \"require('child_process').execSync('../ai-service/.venv/bin/python ../ai-service/test_recognition.py', { stdio: 'inherit' })\"",
     "test:pipeline": "node -e \"require('child_process').execSync('../ai-service/.venv/bin/python ../ai-service/test_pipeline_integration.py', { stdio: 'inherit' })\"",
-    "test:events": "node src/tests/test_recognition_events.js"
+    "test:events": "node src/tests/test_recognition_events.js",
+    "test": "npm run test:students && npm run test:enrollment && npm run test:recognition && npm run test:pipeline && npm run test:events",
+    "test:all": "npm run test:students && npm run test:enrollment && npm run test:recognition && npm run test:pipeline && npm run test:events"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

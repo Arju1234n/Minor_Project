@@ -19,7 +19,12 @@ This microservice provides real-time human detection powered by **Ultralytics YO
 |---|---|---|
 | `GET` | `/health` | Health check & model metadata |
 | `POST` | `/api/ai/detect-file` | Detect humans from multipart image upload (JPEG/PNG) |
-| `POST` | `/api/ai/detect-frame` | Detect humans from Base64 encoded video frames / WebRTC canvas snapshots |
+| `POST` | `/api/ai/detect-frame` | Detect humans with ByteTrack tracking & biometric face recognition |
+| `POST` | `/api/ai/enroll-face` | Validate portrait & extract 128-d ArcFace embedding |
+| `POST` | `/api/ai/compare-embeddings` | Compute cosine similarity between two 128-d vectors |
+| `POST` | `/api/ai/sync-gallery` | Prime the in-memory vector gallery with student embeddings |
+| `GET` | `/api/ai/gallery-status` | Inspect current vector index capacity and student counts |
+| `POST` | `/api/ai/recognize-face` | Query query vector against gallery with 0.363 FAR threshold |
 | `GET` | `/api/ai/config` | Retrieve current confidence and model parameters |
 | `PATCH` | `/api/ai/config` | Dynamically update confidence threshold |
 

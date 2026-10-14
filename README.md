@@ -37,8 +37,14 @@
 - [x] **Phase 8: Production Hardening, Privacy Governance & Deployment**
   - Security hardening with `helmet`, `cors`, and `express-rate-limit` (brute-force defense on auth and API flooding protection).
   - Dynamic system settings synchronization (`GET /api/settings`, `PUT /api/settings`).
-  - Privacy-by-design safeguards: direct P2P video delivery without saving raw video frames to disk or database; no facial recognition or biometric templates.
   - Complete Docker Compose multi-container deployment orchestration (`mongodb`, `backend`, `frontend`, `ai-service`).
+- [x] **⭐ Biometric Face Recognition Upgrade (Complete & Tested)**
+  - **Student Directory**: Student registration with full name, roll number, registration number, department, semester, class, and consented photo uploads (`/students`).
+  - **Face Enrollment Engine**: OpenCV Zoo YuNet face detector + SFace ArcFace 128-d normalized embedding extraction with single-person validation.
+  - **Sub-Millisecond Vector Gallery**: Vectorized cosine similarity matching with 0.363 FAR threshold, ambiguity margin safeguards, and backend gallery auto-sync.
+  - **Tracking Pipeline Integration**: Upper-torso head cropping on YOLOv8/ByteTrack bounding boxes with per-track identity caching for real-time 4–5 FPS performance.
+  - **Live Monitoring HUD & Roster**: Student name and roll number overlays above bounding boxes, glowing face bracket markers, live Identified Students sidebar roster, and real-time recognition audit events.
+  - **Biometric Governance**: Admin biometrics wipe, 30-day auto-pruning TTL index on `RecognitionEvent`, and zero raw video storage.
 
 ---
 
@@ -203,13 +209,35 @@ This launches:
 
 ---
 
-## 🛡️ Privacy by Design & Security Safeguards
+## 🛡️ Privacy by Design & Biometric Security Safeguards
 
-1. **Zero Video Persistence**: Raw camera video frames are transmitted strictly peer-to-peer over WebRTC (encrypted with SRTP/DTLS) and are **never** written to database or disk.
-2. **Anonymous Detection**: The AI detector analyzes general human silhouettes (COCO class ID 0). No facial recognition, biometric templates, or personally identifiable attributes are recorded.
-3. **Operator Transparency**: The smartphone camera UI displays active live recording status indicators and viewer count badges at all times.
-4. **Data Retention & TTL**: MongoDB collections include automatic TTL expiry indexes (30-day default), with on-demand manual pruning available via the Settings page.
-5. **Rate Limiting**: Express backend enforces rate limits on authentication attempts (max 20 per 15 minutes) and API endpoints to prevent brute-force attacks and abuse.
+1. **Zero Video Persistence**: Raw camera video frames are transmitted strictly peer-to-peer over WebRTC (encrypted with SRTP/DTLS) and are **never** written to database or disk. Only temporary in-memory canvas frames are evaluated by the AI detector.
+2. **Consented Enrollment**: Face photographs and extracted 128-d ArcFace embeddings are captured only for enrolled students with explicit administrative consent.
+3. **Biometric Wipe on Demand**: Admins can permanently wipe student face embeddings at any time (`DELETE /api/students/:id/enrollment`), immediately removing biometric vectors from MongoDB and clearing them from the AI vector gallery.
+4. **Data Retention & TTL**: The `RecognitionEvent` audit collection features an automatic 30-day MongoDB TTL expiry index.
+5. **No False Certainty**: When student faces are occluded, poorly lit, or lack sufficient cosine similarity (< 0.363), they are strictly labeled "Unknown" or "Identity unavailable" rather than guessing.
+6. **Rate Limiting**: Express backend enforces rate limits on authentication attempts (max 20 per 15 minutes) and API endpoints to prevent brute-force attacks and abuse.
+
+---
+
+## 🧪 Automated Test Suites
+
+Run the end-to-end verification suite across all 5 upgrade phases:
+
+```bash
+cd backend
+npm test
+```
+
+Or execute individual phase test suites:
+
+```bash
+npm run test:students     # Phase 1: Student CRUD, constraints & duplicate validation
+npm run test:enrollment   # Phase 2: Single-face validation, YuNet detection & 128-d SFace extraction
+npm run test:recognition  # Phase 3: Sub-millisecond vector gallery, similarity threshold & matching
+npm run test:pipeline     # Phase 4: YOLOv8 + ByteTrack + Facial recognition pipeline integration
+npm run test:events       # Phase 5: Recognition audit events, populated querying & TTL retention
+```
 
 ---
 
