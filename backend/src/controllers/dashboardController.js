@@ -71,3 +71,41 @@ exports.getEvents = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 };
+
+/**
+ * POST /api/dashboard/events
+ * Record a new detection event and broadcast update.
+ */
+exports.recordEvent = async (req, res) => {
+  try {
+    const { sessionId, peopleCount, detections } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ success: false, message: 'sessionId is required' });
+    }
+    const event = await DetectionEvent.create({
+      sessionId,
+      peopleCount: peopleCount !== undefined ? peopleCount : (detections ? detections.length : 0),
+      detections: detections || [],
+      timestamp: new Date(),
+    });
+
+    const io = req.app.get('io');
+    if (io) {
+      io.to(`session:${sessionId}`).emit('detection-update', {
+        sessionId,
+        peopleCount: event.peopleCount,
+        detections: event.detections,
+        timestamp: event.timestamp,
+      });
+      io.emit('dashboard-stats-update', {
+        sessionId,
+        peopleCount: event.peopleCount,
+      });
+    }
+
+    res.status(201).json({ success: true, event });
+  } catch (err) {
+    console.error('Record event error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};

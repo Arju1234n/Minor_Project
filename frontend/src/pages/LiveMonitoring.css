@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════
-   Live Remote Monitoring — Phase 3 Styling
+   Live Remote Monitoring — Phase 5 Styling
    ═══════════════════════════════════════════════════════ */
 
 .monitoring-page {
@@ -167,6 +167,7 @@
   gap: 8px;
   z-index: 3;
   pointer-events: none;
+  flex-wrap: wrap;
 }
 
 .viewport-hud .hud-badge {
@@ -177,7 +178,7 @@
   border-radius: var(--radius-sm);
   font-size: 11px;
   font-weight: 700;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(0, 0, 0, 0.75);
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, 0.15);
   color: #fff;
@@ -186,6 +187,17 @@
 
 .viewport-hud .hud-badge.live {
   color: #4ade80;
+}
+
+.viewport-hud .hud-badge.ai-badge {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.viewport-hud .hud-badge.fps-badge {
+  color: #38bdf8;
+  font-family: monospace;
 }
 
 /* ── Controls Bar ───────────────────────────────────── */
@@ -234,6 +246,13 @@
   background: rgba(255, 255, 255, 0.2);
 }
 
+.control-btn.active-glow {
+  background: var(--accent-emerald);
+  border-color: var(--accent-emerald);
+  color: #0f172a;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.6);
+}
+
 /* ── Stream Footer Info ─────────────────────────────── */
 .stream-footer-info {
   display: flex;
@@ -272,12 +291,108 @@
   margin-bottom: var(--space-sm);
 }
 
+/* ── Phase 5: AI Control Card ───────────────────────── */
+.ai-control-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  border-color: rgba(99, 102, 241, 0.3);
+  background: linear-gradient(145deg, rgba(30, 41, 59, 0.6) 0%, rgba(15, 23, 42, 0.8) 100%);
+}
+
+.control-toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.control-toggle-label {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.slider-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.slider-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.slider-value {
+  font-weight: 700;
+  color: var(--accent-indigo);
+  font-family: monospace;
+}
+
+.ai-slider {
+  width: 100%;
+  accent-color: var(--accent-indigo);
+  cursor: pointer;
+}
+
+.checkbox-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.checkbox-label input[type="checkbox"] {
+  accent-color: var(--accent-indigo);
+  cursor: pointer;
+}
+
+.ai-stats-pill-box {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.stat-pill {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 6px 4px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-pill-label {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.stat-pill-val {
+  font-size: 13px;
+  font-weight: 700;
+}
+
 /* Session Switcher List */
 .session-list {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 220px;
+  max-height: 200px;
   overflow-y: auto;
   margin-bottom: var(--space-sm);
 }
@@ -366,24 +481,6 @@
   font-size: 11px;
   color: var(--text-muted);
   font-family: monospace;
-}
-
-/* AI Stat Row */
-.ai-stat-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  font-size: var(--font-xs);
-}
-
-.ai-stat-row:last-child {
-  border-bottom: none;
-}
-
-.ai-stat-label {
-  color: var(--text-secondary);
 }
 
 /* ── Responsive ─────────────────────────────────────── */

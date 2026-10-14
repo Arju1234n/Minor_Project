@@ -74,4 +74,46 @@ export const dashboardAPI = {
     const query = new URLSearchParams(params).toString();
     return request(`/dashboard/events${query ? `?${query}` : ''}`);
   },
+  recordEvent: (eventData) =>
+    request('/dashboard/events', {
+      method: 'POST',
+      body: JSON.stringify(eventData),
+    }),
 };
+
+// ── AI Computer Vision Microservice ────────────────────
+const AI_URL = import.meta.env.VITE_AI_URL || 'http://localhost:8000';
+
+export const aiAPI = {
+  detectFrame: async (base64Image, confThreshold = 0.45) => {
+    const res = await fetch(`${AI_URL}/api/ai/detect-frame`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: base64Image,
+        conf_threshold: confThreshold,
+        return_annotated: false,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'AI detection failed');
+    }
+    return res.json();
+  },
+
+  getConfig: async () => {
+    const res = await fetch(`${AI_URL}/api/ai/config`);
+    return res.json();
+  },
+
+  updateConfig: async (conf) => {
+    const res = await fetch(`${AI_URL}/api/ai/config`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conf }),
+    });
+    return res.json();
+  },
+};
+

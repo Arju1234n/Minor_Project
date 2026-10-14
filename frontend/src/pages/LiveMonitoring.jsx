@@ -12,18 +12,23 @@ import {
   HiOutlineExclamationCircle,
   HiOutlineCheckCircle,
   HiOutlineDeviceMobile,
+  HiOutlineUsers,
+  HiOutlineAdjustments,
+  HiOutlineLightningBolt,
+  HiOutlineSparkles,
 } from 'react-icons/hi';
-import { cameraAPI } from '../services/api';
+import { cameraAPI, dashboardAPI, aiAPI } from '../services/api';
 import { getSocket, fetchIceServers, DEFAULT_ICE_SERVERS } from '../services/webrtc';
 import './LiveMonitoring.css';
 
 /**
- * Live Monitoring Page — Phase 3:
- * - Select and switch between camera sessions
- * - Receive WebRTC video stream from smartphone camera
- * - Low-latency P2P streaming via STUN/TURN ICE negotiation
- * - Interactive video player with fullscreen, volume, diagnostics, and snapshot
- * - Canvas overlay layer ready for Phase 5 YOLO bounding boxes
+ * Live Monitoring Page — Phase 5:
+ * - Real-time WebRTC peer connection from smartphone camera
+ * - Automated frame extraction & YOLOv8 human detection (person class only)
+ * - Canvas overlay with responsive neon bounding boxes & confidence score tags
+ * - Live people count counter and inference latency metrics
+ * - Configurable detection threshold & overlay visibility controls
+ * - Detection events recording into MongoDB for session history
  */
 export default function LiveMonitoring() {
   const [searchParams] = useSearchParams();
@@ -49,6 +54,30 @@ export default function LiveMonitoring() {
   const [copied, setCopied] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
+  // ── Phase 5: AI Computer Vision State ────────────────
+  const [aiEnabled, setAiEnabled] = useState(true);
+  const [showBoxes, setShowBoxes] = useState(true);
+  const [showConfidence, setShowConfidence] = useState(true);
+  const [confThreshold, setConfThreshold] = useState(0.45);
+  const [peopleCount, setPeopleCount] = useState(0);
+  const [inferenceTimeMs, setInferenceTimeMs] = useState(0);
+  const [aiServiceStatus, setAiServiceStatus] = useState('checking'); // 'online' | 'offline' | 'checking'
+  const [activeDetections, setActiveDetections] = useState([]);
+
+  const isDetectingRef = useRef(false);
+  const lastRecordTimeRef = useRef(0);
+  const lastRecordedCountRef = useRef(-1);
+
+  // Check AI Service Health on mount
+  useEffect(() => {
+    aiAPI.getConfig()
+      .then((cfg) => {
+        setAiServiceStatus('online');
+        if (cfg.default_conf) setConfThreshold(cfg.default_conf);
+      })
+      .catch(() => setAiServiceStatus('offline'));
+  }, []);
+
   // Fetch camera list
   const loadCameras = useCallback(async () => {
     try {
@@ -57,7 +86,6 @@ export default function LiveMonitoring() {
       const sessions = res.sessions || [];
       setCameras(sessions);
 
-      // Auto-select session if none selected
       if (!selectedSessionId && sessions.length > 0) {
         setSelectedSessionId(sessions[0].sessionId);
       }
@@ -76,7 +104,7 @@ export default function LiveMonitoring() {
   }, [loadCameras]);
 
   /**
-   * Reset existing WebRTC peer connection
+   * Reset existing WebRTC peer connection & overlays
    */
   const cleanupPeerConnection = useCallback(() => {
     if (peerConnectionRef.current) {
@@ -90,8 +118,14 @@ export default function LiveMonitoring() {
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = null;
     }
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
     setConnectionStatus('disconnected');
     setStreamStats(null);
+    setPeopleCount(0);
+    setActiveDetections([]);
   }, []);
 
   /**
@@ -107,15 +141,11 @@ export default function LiveMonitoring() {
     const socket = getSocket();
     socketRef.current = socket;
 
-    console.log(`👁️ LiveMonitoring joining room as viewer for: [${selectedSessionId}]`);
-
-    // Join room as viewer
     socket.emit('join-session', {
       sessionId: selectedSessionId,
       role: 'viewer',
     });
 
-    // Session status received from signaling server
     const handleSessionStatus = ({ isBroadcasterOnline, isStreaming, iceServers }) => {
       setIsBroadcasterOnline(isBroadcasterOnline);
       if (iceServers && iceServers.length > 0) {
@@ -128,13 +158,11 @@ export default function LiveMonitoring() {
       }
     };
 
-    // Broadcaster came online
     const handleBroadcasterConnected = ({ isStreaming }) => {
       setIsBroadcasterOnline(true);
       setConnectionStatus(isStreaming ? 'connecting' : 'paused');
     };
 
-    // Broadcaster stream status changed (started/stopped)
     const handleBroadcasterStreamStatus = ({ isStreaming }) => {
       if (isStreaming) {
         setConnectionStatus('connecting');
@@ -146,20 +174,15 @@ export default function LiveMonitoring() {
       }
     };
 
-    // Broadcaster disconnected
     const handleBroadcasterDisconnected = () => {
       setIsBroadcasterOnline(false);
       setConnectionStatus('disconnected');
       cleanupPeerConnection();
     };
 
-    // ──────────────────────────────────────────
-    // Handle Incoming WebRTC Offer from Broadcaster
-    // ──────────────────────────────────────────
     const handleWebRTCOffer = async ({ from, offer, sessionId }) => {
       if (sessionId && sessionId !== selectedSessionId) return;
 
-      console.log(`📩 Received WebRTC offer from broadcaster [${from}]`);
       cleanupPeerConnection();
 
       try {
@@ -169,9 +192,7 @@ export default function LiveMonitoring() {
         });
         peerConnectionRef.current = pc;
 
-        // When remote track arrives, attach to video element
         pc.ontrack = (event) => {
-          console.log('🎥 Remote track received:', event.streams);
           if (remoteVideoRef.current && event.streams[0]) {
             remoteVideoRef.current.srcObject = event.streams[0];
             remoteVideoRef.current.play().catch((e) => console.warn('Play error:', e));
@@ -179,7 +200,6 @@ export default function LiveMonitoring() {
           }
         };
 
-        // Forward ICE candidates back to broadcaster
         pc.onicecandidate = (event) => {
           if (event.candidate && socket.connected) {
             socket.emit('webrtc-ice-candidate', {
@@ -190,9 +210,7 @@ export default function LiveMonitoring() {
           }
         };
 
-        // Connection state changes
         pc.onconnectionstatechange = () => {
-          console.log('Viewer RTCPeerConnection state:', pc.connectionState);
           if (pc.connectionState === 'connected') {
             setConnectionStatus('connected');
           } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
@@ -200,7 +218,6 @@ export default function LiveMonitoring() {
           }
         };
 
-        // Set remote offer & send SDP answer
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -210,8 +227,6 @@ export default function LiveMonitoring() {
           answer,
           sessionId: selectedSessionId,
         });
-
-        console.log(`📤 Sent WebRTC answer back to broadcaster [${from}]`);
       } catch (err) {
         console.error('Error handling WebRTC offer:', err);
         setErrorMessage('Failed to establish WebRTC connection: ' + err.message);
@@ -219,7 +234,6 @@ export default function LiveMonitoring() {
       }
     };
 
-    // Handle ICE Candidate from broadcaster
     const handleWebRTCIceCandidate = async ({ candidate }) => {
       const pc = peerConnectionRef.current;
       if (pc && candidate) {
@@ -249,7 +263,161 @@ export default function LiveMonitoring() {
     };
   }, [selectedSessionId, cleanupPeerConnection]);
 
-  // Update metadata / resolution when video loads
+  // ──────────────────────────────────────────
+  // Phase 5: Draw Bounding Boxes on Overlay Canvas
+  // ──────────────────────────────────────────
+  const drawDetections = useCallback((detections) => {
+    const canvas = canvasRef.current;
+    const video = remoteVideoRef.current;
+    if (!canvas || !video) return;
+
+    // Synchronize internal canvas resolution with rendered viewport size
+    const rect = video.getBoundingClientRect();
+    if (canvas.width !== rect.width || canvas.height !== rect.height) {
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    if (!showBoxes || !detections || detections.length === 0) return;
+
+    detections.forEach((det, idx) => {
+      let x = det.bbox.x;
+      let y = det.bbox.y;
+      let boxW = det.bbox.width;
+      let boxH = det.bbox.height;
+
+      // Use normalized coordinates scaled to rendered canvas viewport
+      if (det.normalized_bbox) {
+        x = det.normalized_bbox.x * w;
+        y = det.normalized_bbox.y * h;
+        boxW = det.normalized_bbox.width * w;
+        boxH = det.normalized_bbox.height * h;
+      }
+
+      const confPercent = Math.round((det.confidence || 0) * 100);
+
+      // Neon Emerald Green bounding box with glow
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = 'rgba(16, 185, 129, 0.7)';
+      ctx.shadowBlur = 8;
+
+      ctx.beginPath();
+      if (ctx.roundRect) {
+        ctx.roundRect(x, y, boxW, boxH, 6);
+      } else {
+        ctx.rect(x, y, boxW, boxH);
+      }
+      ctx.stroke();
+
+      ctx.shadowBlur = 0; // reset shadow
+
+      // Draw Badge Tag
+      if (showConfidence) {
+        const tagText = `Person #${idx + 1} (${confPercent}%)`;
+        ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+        const textMetrics = ctx.measureText(tagText);
+        const tagW = textMetrics.width + 12;
+        const tagH = 20;
+        const tagY = Math.max(0, y - tagH);
+
+        ctx.fillStyle = '#10b981';
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(x, tagY, tagW, tagH, [4, 4, 0, 0]);
+        } else {
+          ctx.fillRect(x, tagY, tagW, tagH);
+        }
+        ctx.fill();
+
+        ctx.fillStyle = '#0f172a';
+        ctx.fillText(tagText, x + 6, tagY + 14);
+      }
+    });
+  }, [showBoxes, showConfidence]);
+
+  // Re-render bounding boxes if display settings change
+  useEffect(() => {
+    drawDetections(activeDetections);
+  }, [drawDetections, activeDetections]);
+
+  // ──────────────────────────────────────────
+  // Phase 5: Real-time Frame Extraction & YOLO Detection Pipeline
+  // ──────────────────────────────────────────
+  useEffect(() => {
+    if (connectionStatus !== 'connected' || !aiEnabled) {
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+      setPeopleCount(0);
+      setActiveDetections([]);
+      return;
+    }
+
+    // Hidden extraction canvas (640x360 for high-speed inference)
+    const offscreenCanvas = document.createElement('canvas');
+    offscreenCanvas.width = 640;
+    offscreenCanvas.height = 360;
+    const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+
+    const detectionInterval = setInterval(async () => {
+      const video = remoteVideoRef.current;
+      if (!video || video.readyState < 2 || isDetectingRef.current) return;
+
+      isDetectingRef.current = true;
+
+      try {
+        offscreenCtx.drawImage(video, 0, 0, 640, 360);
+        const base64Data = offscreenCanvas.toDataURL('image/jpeg', 0.65);
+
+        const data = await aiAPI.detectFrame(base64Data, confThreshold);
+        setAiServiceStatus('online');
+
+        if (data.success) {
+          const detections = data.detections || [];
+          setPeopleCount(detections.length);
+          setActiveDetections(detections);
+          setInferenceTimeMs(data.inference_time_ms || 0);
+
+          drawDetections(detections);
+
+          // Periodically log detection events into database (every 4 seconds or on people count change)
+          const now = Date.now();
+          const countChanged = lastRecordedCountRef.current !== detections.length;
+          const timeElapsed = now - lastRecordTimeRef.current > 4000;
+
+          if (selectedSessionId && (countChanged || timeElapsed)) {
+            lastRecordTimeRef.current = now;
+            lastRecordedCountRef.current = detections.length;
+            dashboardAPI.recordEvent({
+              sessionId: selectedSessionId,
+              peopleCount: detections.length,
+              detections: detections.map((d, i) => ({
+                trackingId: i + 1,
+                confidence: d.confidence,
+                bbox: d.bbox,
+              })),
+            }).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.warn('AI Frame inference error:', err.message);
+        setAiServiceStatus('offline');
+      } finally {
+        isDetectingRef.current = false;
+      }
+    }, 280); // Run inference ~3.5 times per second
+
+    return () => clearInterval(detectionInterval);
+  }, [connectionStatus, aiEnabled, confThreshold, selectedSessionId, drawDetections]);
+
+  // Update metadata when video dimensions change
   const handleLoadedMetadata = () => {
     if (!remoteVideoRef.current) return;
     const width = remoteVideoRef.current.videoWidth;
@@ -270,9 +438,6 @@ export default function LiveMonitoring() {
     }
   };
 
-  /**
-   * Copy mobile streaming URL
-   */
   const handleCopyMobileUrl = () => {
     if (!selectedSessionId) return;
     const url = `${window.location.origin}/camera/${selectedSessionId}`;
@@ -282,9 +447,6 @@ export default function LiveMonitoring() {
     });
   };
 
-  /**
-   * Open mobile camera page in new tab for testing
-   */
   const handleOpenMobileView = () => {
     if (!selectedSessionId) return;
     window.open(`/camera/${selectedSessionId}`, '_blank');
@@ -299,7 +461,7 @@ export default function LiveMonitoring() {
         <div>
           <h1 className="page-title">Live Remote Monitoring</h1>
           <p className="page-subtitle">
-            Real-time WebRTC video stream received directly from smartphone camera units
+            Real-time WebRTC video feed with live YOLOv8 human detection overlays
           </p>
         </div>
 
@@ -412,9 +574,21 @@ export default function LiveMonitoring() {
                 <div className="hud-badge live">
                   <span className="live-dot" /> WEBRTC LIVE
                 </div>
+                {aiEnabled && (
+                  <div className="hud-badge ai-badge">
+                    <HiOutlineUsers size={14} />
+                    <strong>{peopleCount}</strong> {peopleCount === 1 ? 'PERSON' : 'PEOPLE'}
+                  </div>
+                )}
+                {aiEnabled && inferenceTimeMs > 0 && (
+                  <div className="hud-badge fps-badge">
+                    <HiOutlineLightningBolt size={14} />
+                    {inferenceTimeMs}ms
+                  </div>
+                )}
                 {streamStats && (
                   <div className="hud-badge">
-                    {streamStats.width}×{streamStats.height} px
+                    {streamStats.width}×{streamStats.height}
                   </div>
                 )}
               </div>
@@ -430,6 +604,14 @@ export default function LiveMonitoring() {
                   title={isMuted ? 'Unmute Audio' : 'Mute Audio'}
                 >
                   {isMuted ? <HiOutlineVolumeOff size={18} /> : <HiOutlineVolumeUp size={18} />}
+                </button>
+                <button
+                  type="button"
+                  className={`control-btn ${aiEnabled ? 'active-glow' : ''}`}
+                  onClick={() => setAiEnabled(!aiEnabled)}
+                  title={aiEnabled ? 'Pause AI Detection' : 'Enable AI Detection'}
+                >
+                  <HiOutlineEye size={18} />
                 </button>
               </div>
 
@@ -449,13 +631,90 @@ export default function LiveMonitoring() {
           {/* Quick Stream Info Footer */}
           <div className="stream-footer-info">
             <span>Transmission: <strong>Direct WebRTC (P2P)</strong></span>
-            <span>ICE Relay: <strong>Google STUN (Port 19302)</strong></span>
-            <span>Security: <strong>DTLS-SRTP Encrypted</strong></span>
+            <span>AI Model: <strong>YOLOv8 Nano (Person Only)</strong></span>
+            <span>Status: <strong className={aiServiceStatus === 'online' ? 'text-success' : 'text-danger'}>{aiServiceStatus.toUpperCase()}</strong></span>
           </div>
         </div>
 
-        {/* Right Sidebar: Camera Selection & Stream Diagnostics */}
+        {/* Right Sidebar: Camera Selection & AI Controls */}
         <div className="monitoring-sidebar">
+          {/* Phase 5: Real-Time AI Detection Control Card */}
+          <div className="glass-card ai-control-card">
+            <h3 className="sidebar-card-title">
+              <HiOutlineSparkles size={18} /> AI Detection Controls
+            </h3>
+            <p className="sidebar-card-desc">
+              YOLOv8 neural network inference on incoming live frames:
+            </p>
+
+            {/* AI Toggle Switch */}
+            <div className="control-toggle-row">
+              <span className="control-toggle-label">Human Detection:</span>
+              <button
+                type="button"
+                className={`btn btn-sm ${aiEnabled ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setAiEnabled(!aiEnabled)}
+              >
+                {aiEnabled ? 'ENABLED' : 'PAUSED'}
+              </button>
+            </div>
+
+            {/* Confidence Threshold Slider */}
+            <div className="slider-control-group">
+              <div className="slider-label-row">
+                <span>Confidence Threshold:</span>
+                <span className="slider-value">{Math.round(confThreshold * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min="0.20"
+                max="0.85"
+                step="0.05"
+                value={confThreshold}
+                onChange={(e) => setConfThreshold(parseFloat(e.target.value))}
+                className="ai-slider"
+              />
+            </div>
+
+            {/* Bounding Box Visibility Checkboxes */}
+            <div className="checkbox-control-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showBoxes}
+                  onChange={(e) => setShowBoxes(e.target.checked)}
+                />
+                Show Bounding Boxes
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showConfidence}
+                  onChange={(e) => setShowConfidence(e.target.checked)}
+                />
+                Show Confidence Scores
+              </label>
+            </div>
+
+            {/* AI Stats Pill Box */}
+            <div className="ai-stats-pill-box">
+              <div className="stat-pill">
+                <span className="stat-pill-label">Detected Now</span>
+                <span className="stat-pill-val text-success">{peopleCount}</span>
+              </div>
+              <div className="stat-pill">
+                <span className="stat-pill-label">Inference Time</span>
+                <span className="stat-pill-val text-info">{inferenceTimeMs}ms</span>
+              </div>
+              <div className="stat-pill">
+                <span className="stat-pill-label">AI Engine</span>
+                <span className={`stat-pill-val ${aiServiceStatus === 'online' ? 'text-success' : 'text-danger'}`}>
+                  {aiServiceStatus}
+                </span>
+              </div>
+            </div>
+          </div>
+
           {/* Active Session Switcher Card */}
           <div className="glass-card session-switcher-card">
             <h3 className="sidebar-card-title">
@@ -533,7 +792,7 @@ export default function LiveMonitoring() {
               <HiOutlineDeviceMobile size={18} /> Connect Smartphone
             </h3>
             <p className="sidebar-card-desc">
-              To stream from your smartphone, open this camera unit link on the phone's browser:
+              Open this link on your smartphone's browser to stream video into this AI monitor:
             </p>
 
             <div className="share-link-box">
@@ -561,24 +820,6 @@ export default function LiveMonitoring() {
             >
               <HiOutlineExternalLink size={14} /> Open Mobile View on this Machine
             </button>
-          </div>
-
-          {/* AI Detection Preview (Phase 4-6 Ready) */}
-          <div className="glass-card ai-status-card">
-            <h3 className="sidebar-card-title">
-              <HiOutlineEye size={18} /> AI Computer Vision
-            </h3>
-            <p className="sidebar-card-desc">
-              Real-time human detection (YOLOv8) and multi-person tracking (ByteTrack):
-            </p>
-            <div className="ai-stat-row">
-              <span className="ai-stat-label">YOLO Human Detection:</span>
-              <span className="badge badge-warning">Ready for Phase 4</span>
-            </div>
-            <div className="ai-stat-row">
-              <span className="ai-stat-label">ByteTrack Multi-Person:</span>
-              <span className="badge badge-warning">Ready for Phase 6</span>
-            </div>
           </div>
         </div>
       </div>
