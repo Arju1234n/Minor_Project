@@ -43,5 +43,18 @@ services:
     depends_on:
       - backend
 
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: smart-classroom-ai-service
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - AI_SERVICE_PORT=8000
+      - YOLO_MODEL=yolov8n.pt
+      - DETECTION_CONFIDENCE=0.45
+
 volumes:
   mongo_data:

@@ -1,9 +1,56 @@
-# AI Computer Vision Service (FastAPI + YOLO + ByteTrack)
+# AI Computer Vision Service (FastAPI + YOLOv8)
 
-This directory is reserved for **Phase 4–6** of the project:
-- **FastAPI** server for processing computer vision tasks and frame streams
-- **YOLOv8** for real-time human detection (person class only)
-- **ByteTrack** for multi-person tracking and persistent ID association
-- Virtual line crossing and zone occupancy analysis
+> **Smart Classroom AI — Microservice for Computer Vision & Spatial Human Detection**
 
-*Will be implemented incrementally in Phase 4.*
+---
+
+## 📌 Overview
+This microservice provides real-time human detection powered by **Ultralytics YOLOv8**:
+- **Target Class**: Exclusively filters for the `person` class (COCO class ID 0)
+- **Configurable Confidence**: Dynamic threshold adjustments (`conf_threshold`, default 0.45)
+- **Output Data**: Pixel bounding boxes, normalized coordinates, detection confidence scores, and visual annotated frames
+- **Fast Inference**: Lightweight nano model (`yolov8n.pt`) optimized for low-latency processing
+
+---
+
+## 🛠️ Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Health check & model metadata |
+| `POST` | `/api/ai/detect-file` | Detect humans from multipart image upload (JPEG/PNG) |
+| `POST` | `/api/ai/detect-frame` | Detect humans from Base64 encoded video frames / WebRTC canvas snapshots |
+| `GET` | `/api/ai/config` | Retrieve current confidence and model parameters |
+| `PATCH` | `/api/ai/config` | Dynamically update confidence threshold |
+
+---
+
+## 🚀 Running Locally
+
+```bash
+cd ai-service
+
+# Activate virtual environment
+source .venv/bin/activate
+
+# Install dependencies (if not already installed)
+pip install -r requirements.txt
+
+# Start the FastAPI service
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+---
+
+## 🧪 Testing the Detector
+
+Run the automated verification suite:
+```bash
+python test_detector.py
+```
+This test:
+1. Loads `yolov8n.pt`.
+2. Downloads/loads a multi-person test image (`sample_classroom_test.jpg`).
+3. Runs inference filtering exclusively for humans.
+4. Generates an annotated image with bounding box badges (`detected_output.jpg`).
+5. Validates person counts and output bounding box schemas.
