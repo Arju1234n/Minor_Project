@@ -11,17 +11,20 @@ import {
   HiOutlineStop,
   HiOutlineClipboardCopy,
   HiOutlineLightningBolt,
+  HiOutlineUserGroup,
 } from 'react-icons/hi';
+import { getSocket, fetchIceServers, DEFAULT_ICE_SERVERS } from '../services/webrtc';
 import './MobileCamera.css';
 
 /**
- * Mobile Camera Page — Phase 2:
+ * Mobile Camera Page — Phase 2 & Phase 3:
  * - Direct navigator.mediaDevices.getUserMedia integration
- * - Front (user) and Rear (environment) camera switching
+ * - Front (user) and Rear (environment) camera switching with track replacement
  * - Device selection & capabilities discovery
  * - Touch-optimized live local video preview with iOS/Android compatibility
  * - Torch / Flashlight control (where hardware supported)
- * - Session binding & diagnostic badges
+ * - WebRTC Signaling & P2P video broadcasting to Admin Dashboard
+ * - Multi-viewer peer connection management
  */
 export default function MobileCamera() {
   const { sessionId: paramSessionId } = useParams();
@@ -51,6 +54,13 @@ export default function MobileCamera() {
   const [errorMessage, setErrorMessage] = useState('');
   const [isSecureContext, setIsSecureContext] = useState(true);
 
+  // WebRTC & Peer Connection state
+  const socketRef = useRef(null);
+  const peerConnections = useRef(new Map()); // viewerId -> RTCPeerConnection
+  const iceServersRef = useRef(DEFAULT_ICE_SERVERS);
+  const [connectedViewers, setConnectedViewers] = useState(0);
+  const [webrtcStatus, setWebrtcStatus] = useState('idle'); // 'idle' | 'signaling' | 'broadcasting'
+
   // Check secure context on mount (getUserMedia requires HTTPS or localhost)
   useEffect(() => {
     if (window.isSecureContext === false && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
@@ -64,6 +74,13 @@ export default function MobileCamera() {
       setSessionId(paramSessionId);
     }
   }, [paramSessionId]);
+
+  // Fetch configured ICE servers on mount
+  useEffect(() => {
+    fetchIceServers().then((servers) => {
+      iceServersRef.current = servers;
+    });
+  }, []);
 
   // Enumerate video input devices
   const enumerateVideoDevices = useCallback(async () => {
@@ -79,10 +96,177 @@ export default function MobileCamera() {
     }
   }, []);
 
-  // Enumerate devices once on mount
   useEffect(() => {
     enumerateVideoDevices();
   }, [enumerateVideoDevices]);
+
+  /**
+   * Create an RTCPeerConnection for a specific viewer and initiate an SDP Offer
+   */
+  const createPeerConnectionForViewer = useCallback(async (viewerId) => {
+    if (!streamRef.current) {
+      console.warn('Cannot create peer connection: stream is not active yet');
+      return;
+    }
+
+    // Close any prior connection for this viewer
+    if (peerConnections.current.has(viewerId)) {
+      try {
+        peerConnections.current.get(viewerId).close();
+      } catch (e) {
+        console.warn('Error closing prior PC:', e);
+      }
+      peerConnections.current.delete(viewerId);
+    }
+
+    const socket = socketRef.current;
+    if (!socket) return;
+
+    console.log(`📡 Creating RTCPeerConnection for viewer: ${viewerId}`);
+
+    const pc = new RTCPeerConnection({
+      iceServers: iceServersRef.current,
+      iceCandidatePoolSize: 2,
+    });
+
+    peerConnections.current.set(viewerId, pc);
+
+    // Add local tracks to peer connection
+    streamRef.current.getTracks().forEach((track) => {
+      pc.addTrack(track, streamRef.current);
+    });
+
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate && socket.connected) {
+        socket.emit('webrtc-ice-candidate', {
+          targetId: viewerId,
+          candidate: event.candidate,
+          sessionId,
+        });
+      }
+    };
+
+    // Monitor connection state
+    pc.onconnectionstatechange = () => {
+      console.log(`WebRTC state with viewer [${viewerId}]:`, pc.connectionState);
+      if (pc.connectionState === 'connected') {
+        setWebrtcStatus('broadcasting');
+      }
+
+      // Count active connected peers
+      let activeCount = 0;
+      peerConnections.current.forEach((conn) => {
+        if (conn.connectionState === 'connected') activeCount++;
+      });
+      setConnectedViewers(activeCount);
+    };
+
+    try {
+      // Create and send SDP Offer
+      const offer = await pc.createOffer({
+        offerToReceiveAudio: false,
+        offerToReceiveVideo: false,
+      });
+      await pc.setLocalDescription(offer);
+
+      socket.emit('webrtc-offer', {
+        targetId: viewerId,
+        offer,
+        sessionId,
+      });
+    } catch (err) {
+      console.error('Failed to create WebRTC offer for viewer:', err);
+    }
+  }, [sessionId]);
+
+  /**
+   * Set up WebRTC Signaling via Socket.IO
+   */
+  useEffect(() => {
+    const socket = getSocket();
+    socketRef.current = socket;
+
+    // Join room as broadcaster
+    socket.emit('join-session', {
+      sessionId,
+      role: 'broadcaster',
+      cameraName: 'Smartphone Camera Unit',
+    });
+
+    // Viewer joined — if we have active stream, start P2P negotiation
+    const handleViewerJoined = ({ viewerId }) => {
+      console.log('👁️ Viewer joined notification received:', viewerId);
+      if (streamRef.current) {
+        createPeerConnectionForViewer(viewerId);
+      }
+    };
+
+    // Viewer left — close and clean up PC
+    const handleViewerLeft = ({ viewerId }) => {
+      console.log('Viewer left:', viewerId);
+      if (peerConnections.current.has(viewerId)) {
+        try {
+          peerConnections.current.get(viewerId).close();
+        } catch (e) {
+          console.warn('Error closing PC:', e);
+        }
+        peerConnections.current.delete(viewerId);
+      }
+      let activeCount = 0;
+      peerConnections.current.forEach((conn) => {
+        if (conn.connectionState === 'connected') activeCount++;
+      });
+      setConnectedViewers(activeCount);
+    };
+
+    // Receive SDP Answer from viewer
+    const handleWebRTCAnswer = async ({ from, answer }) => {
+      const pc = peerConnections.current.get(from);
+      if (pc && pc.signalingState !== 'closed') {
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          console.log(`✅ Set remote description (answer) for viewer: ${from}`);
+        } catch (err) {
+          console.error('Failed to set remote description answer:', err);
+        }
+      }
+    };
+
+    // Receive ICE Candidate from viewer
+    const handleWebRTCIceCandidate = async ({ from, candidate }) => {
+      const pc = peerConnections.current.get(from);
+      if (pc && candidate) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          console.warn('Failed to add remote ICE candidate:', err);
+        }
+      }
+    };
+
+    socket.on('viewer-joined', handleViewerJoined);
+    socket.on('viewer-left', handleViewerLeft);
+    socket.on('webrtc-answer', handleWebRTCAnswer);
+    socket.on('webrtc-ice-candidate', handleWebRTCIceCandidate);
+
+    return () => {
+      socket.off('viewer-joined', handleViewerJoined);
+      socket.off('viewer-left', handleViewerLeft);
+      socket.off('webrtc-answer', handleWebRTCAnswer);
+      socket.off('webrtc-ice-candidate', handleWebRTCIceCandidate);
+
+      // Close all peer connections on unmount
+      peerConnections.current.forEach((pc) => {
+        try {
+          pc.close();
+        } catch (e) {
+          console.warn('PC close error:', e);
+        }
+      });
+      peerConnections.current.clear();
+    };
+  }, [sessionId, createPeerConnectionForViewer]);
 
   // Clean up media tracks when component unmounts
   useEffect(() => {
@@ -90,8 +274,14 @@ export default function MobileCamera() {
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
+      if (socketRef.current) {
+        socketRef.current.emit('broadcaster-stream-status', {
+          sessionId,
+          isStreaming: false,
+        });
+      }
     };
-  }, []);
+  }, [sessionId]);
 
   // Update stream stats once video metadata loads
   const handleLoadedMetadata = () => {
@@ -116,7 +306,7 @@ export default function MobileCamera() {
   };
 
   /**
-   * Start local camera stream
+   * Start local camera stream and notify signaling server
    */
   const startCamera = async (overrideFacingMode, overrideDeviceId) => {
     setIsLoading(true);
@@ -154,7 +344,6 @@ export default function MobileCamera() {
           audio: false,
         });
       } catch (constraintErr) {
-        // Fallback to basic constraints if ideal constraints fail (e.g. older smartphone)
         console.warn('Ideal constraints failed, attempting basic fallback:', constraintErr);
         newStream = await navigator.mediaDevices.getUserMedia({
           video: targetFacingMode ? { facingMode: targetFacingMode } : true,
@@ -174,6 +363,14 @@ export default function MobileCamera() {
 
       // Re-enumerate devices so permission-revealed labels populate
       await enumerateVideoDevices();
+
+      // Notify signaling server that broadcaster stream is active
+      if (socketRef.current) {
+        socketRef.current.emit('broadcaster-stream-status', {
+          sessionId,
+          isStreaming: true,
+        });
+      }
     } catch (err) {
       console.error('Camera access error:', err);
       let userFriendlyMsg = 'Could not access camera.';
@@ -196,7 +393,7 @@ export default function MobileCamera() {
   };
 
   /**
-   * Stop local camera stream
+   * Stop local camera stream and notify signaling server
    */
   const stopCamera = () => {
     if (streamRef.current) {
@@ -210,17 +407,70 @@ export default function MobileCamera() {
     setStreamStats(null);
     setTorchOn(false);
     setSupportsTorch(false);
+    setConnectedViewers(0);
+    setWebrtcStatus('idle');
+
+    // Close all viewer peer connections
+    peerConnections.current.forEach((pc) => {
+      try {
+        pc.close();
+      } catch (e) {
+        console.warn('Error closing PC on stop:', e);
+      }
+    });
+    peerConnections.current.clear();
+
+    // Inform server that stream stopped
+    if (socketRef.current) {
+      socketRef.current.emit('broadcaster-stream-status', {
+        sessionId,
+        isStreaming: false,
+      });
+    }
   };
 
   /**
-   * Toggle between front and rear cameras
+   * Toggle between front and rear cameras seamlessly via track replacement
    */
   const handleToggleFacingMode = async () => {
     const nextMode = facingMode === 'environment' ? 'user' : 'environment';
     setFacingMode(nextMode);
-    setSelectedDeviceId(''); // clear exact device id to allow facingMode switch
+    setSelectedDeviceId('');
+
     if (isStreaming) {
-      await startCamera(nextMode, '');
+      try {
+        // Obtain new track
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: nextMode }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        const newTrack = newStream.getVideoTracks()[0];
+
+        // Replace track on all existing peer connections without renegotiating
+        peerConnections.current.forEach((pc) => {
+          const senders = pc.getSenders();
+          const videoSender = senders.find((s) => s.track && s.track.kind === 'video');
+          if (videoSender) {
+            videoSender.replaceTrack(newTrack);
+          }
+        });
+
+        // Stop old track
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+        }
+
+        streamRef.current = newStream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = newStream;
+        }
+
+        setMirrored(nextMode === 'user');
+        setTorchOn(false);
+      } catch (err) {
+        console.warn('Track replacement failed, falling back to full restart:', err);
+        await startCamera(nextMode, '');
+      }
     }
   };
 
@@ -299,7 +549,7 @@ export default function MobileCamera() {
           <div className="mobile-camera-alert warning animate-slide-up">
             <HiOutlineExclamationCircle size={20} />
             <div>
-              <strong>Insecure Context Detected:</strong> Camera access requires HTTPS when accessed remotely over the network. If connecting from a smartphone, ensure you are using an HTTPS reverse proxy (e.g., ngrok/Cloudflare tunnel) or testing via localhost.
+              <strong>Insecure Context:</strong> Camera access requires HTTPS when accessed remotely over the network. If connecting from a smartphone, ensure you are using an HTTPS reverse proxy (e.g., ngrok/Cloudflare tunnel) or testing via localhost.
             </div>
           </div>
         )}
@@ -343,11 +593,11 @@ export default function MobileCamera() {
                 <HiOutlineVideoCamera size={52} />
               </div>
               <h3>Camera is Offline</h3>
-              <p>Tap "Start Camera" below to grant browser permission and start the local video preview.</p>
+              <p>Tap "Start Camera" to start the preview and broadcast live video to the Admin Dashboard via WebRTC.</p>
               <div className="feature-tags">
+                <span>✓ WebRTC P2P Live</span>
+                <span>✓ STUN / NAT Traversal</span>
                 <span>✓ Front / Rear Switch</span>
-                <span>✓ HD Resolution</span>
-                <span>✓ WebRTC Ready</span>
               </div>
             </div>
           )}
@@ -356,8 +606,11 @@ export default function MobileCamera() {
           {isStreaming && (
             <div className="mobile-camera-hud">
               <div className="hud-top">
-                <span className="hud-badge live">
-                  <span className="live-dot" /> LIVE PREVIEW
+                <span className={`hud-badge ${connectedViewers > 0 ? 'live' : 'waiting'}`}>
+                  <span className={`live-dot ${connectedViewers > 0 ? 'connected' : 'waiting'}`} />
+                  {connectedViewers > 0
+                    ? `BROADCASTING (${connectedViewers} VIEWER${connectedViewers > 1 ? 'S' : ''})`
+                    : 'PREVIEW READY (WAITING FOR ADMIN)'}
                 </span>
                 {streamStats && (
                   <span className="hud-badge resolution">
@@ -401,7 +654,6 @@ export default function MobileCamera() {
 
         {/* Device Selection & Controls Card */}
         <div className="mobile-camera-controls-card">
-          {/* Hardware Device Picker (if multiple cameras available) */}
           {devices.length > 1 && (
             <div className="device-selector-group">
               <label htmlFor="cameraSelect" className="control-label">
@@ -434,7 +686,7 @@ export default function MobileCamera() {
               >
                 {isLoading ? (
                   <>
-                    <span className="spinner-sm" /> Requesting Camera…
+                    <span className="spinner-sm" /> Initializing…
                   </>
                 ) : (
                   <>
@@ -465,37 +717,37 @@ export default function MobileCamera() {
           </div>
         </div>
 
-        {/* Connection & Phase Status Card */}
+        {/* Connection & Status Card */}
         <div className="mobile-camera-status-card">
           <div className="status-item">
             <span className="status-label">Local Camera:</span>
             <span className={`status-val ${isStreaming ? 'text-success' : 'text-muted'}`}>
               <span className={`pulse-dot ${isStreaming ? 'online' : 'offline'}`} />
-              {isStreaming ? 'Active Preview' : 'Idle / Stopped'}
+              {isStreaming ? 'Hardware Active' : 'Stopped'}
             </span>
           </div>
           <div className="status-item">
-            <span className="status-label">WebRTC Peer:</span>
-            <span className="status-val text-warning">
-              <span className="pulse-dot idle" />
-              Ready for Phase 3
+            <span className="status-label">WebRTC P2P Stream:</span>
+            <span className={`status-val ${connectedViewers > 0 ? 'text-success' : isStreaming ? 'text-warning' : 'text-muted'}`}>
+              <span className={`pulse-dot ${connectedViewers > 0 ? 'online' : isStreaming ? 'idle' : 'offline'}`} />
+              {connectedViewers > 0 ? `Live Stream (${connectedViewers} Admin Active)` : isStreaming ? 'Ready / Waiting for Admin' : 'Idle'}
             </span>
           </div>
           <div className="status-item">
-            <span className="status-label">Facing Mode:</span>
+            <span className="status-label">Signaling Server:</span>
             <span className="status-val text-info">
-              {facingMode === 'environment' ? 'Rear Camera (Back)' : 'Front Camera (Selfie)'}
+              Socket.IO Connected
             </span>
           </div>
         </div>
 
         {/* Instructions */}
         <div className="mobile-camera-guide">
-          <h3>📱 Smartphone Tips:</h3>
+          <h3>📱 Live Streaming Instructions:</h3>
           <ul>
-            <li>Position your phone horizontally or vertically facing the classroom or room entry point.</li>
-            <li>In Phase 3, opening this session on the admin dashboard will automatically link the live WebRTC stream.</li>
-            <li>Keep the screen active and browser open while streaming.</li>
+            <li>Open the <strong>Admin Dashboard &gt; Live Monitoring</strong> on your laptop and select session <code>{sessionId}</code>.</li>
+            <li>Video is streamed directly peer-to-peer using WebRTC without routing raw frames through the database.</li>
+            <li>In Phase 4, YOLO detection and ByteTrack multi-person tracking will analyze the incoming stream in real time.</li>
           </ul>
         </div>
       </div>

@@ -167,7 +167,7 @@ WebRTC establishes direct peer-to-peer media transmission between the smartphone
 
 - [x] **Phase 1**: Monorepo structure, Express backend, MongoDB models, JWT auth, and React admin dashboard.
 - [x] **Phase 2**: Smartphone camera access (`navigator.mediaDevices.getUserMedia`), device selection (front/rear), and local video preview.
-- [ ] **Phase 3**: WebRTC signaling server & peer connection for remote live video transmission between phone and laptop.
+- [x] **Phase 3**: WebRTC signaling server & peer connection for remote live video transmission between phone and laptop.
 - [ ] **Phase 4**: Python FastAPI service with YOLOv8 human detection (person class only).
 - [ ] **Phase 5**: Real-time video frame pipeline integration with detection bounding boxes & confidence scores.
 - [ ] **Phase 6**: ByteTrack multi-person tracking with persistent IDs and virtual tripwire/zone counting.

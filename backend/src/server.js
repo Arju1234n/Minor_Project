@@ -69,15 +69,10 @@ app.use((err, _req, res, _next) => {
 });
 
 // ──────────────────────────────────────────
-// Socket.IO basic connection logging
+// WebRTC Signaling & Socket.IO
 // ──────────────────────────────────────────
-io.on('connection', (socket) => {
-  console.log(`🔌 Socket connected: ${socket.id}`);
-
-  socket.on('disconnect', () => {
-    console.log(`🔌 Socket disconnected: ${socket.id}`);
-  });
-});
+const { setupWebRTCSignaling } = require('./signaling/webrtcSignaling');
+setupWebRTCSignaling(io);
 
 // ──────────────────────────────────────────
 // Start server

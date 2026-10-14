@@ -62,6 +62,9 @@ export const cameraAPI = {
 
   delete: (sessionId) =>
     request(`/cameras/${sessionId}`, { method: 'DELETE' }),
+
+  getPublicConfig: (sessionId) => request(`/cameras/public/${sessionId}`),
+  getIceServers: () => request('/cameras/public/ice-servers'),
 };
 
 // ── Dashboard ──────────────────────────────────────────
