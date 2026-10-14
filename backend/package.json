@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "seed": "node src/seed.js",
     "test:students": "node src/tests/test_students.js",
-    "test:enrollment": "node src/tests/test_face_enrollment.js"
+    "test:enrollment": "node src/tests/test_face_enrollment.js",
+    "test:recognition": "node -e \"require('child_process').execSync('../ai-service/.venv/bin/python ../ai-service/test_recognition.py', { stdio: 'inherit' })\""
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

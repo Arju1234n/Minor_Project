@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from detector import HumanDetector
 from tracker import TrackerRegistry
 from face_engine import face_engine
+from recognition_service import gallery
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -242,6 +243,90 @@ def compare_embeddings(payload: CompareEmbeddingsPayload):
         "is_match": sim >= 0.363,
         "threshold": 0.363
     }
+
+# ──────────────────────────────────────────
+# Face Recognition & Gallery Matching — Phase 3
+# ──────────────────────────────────────────
+class SyncGalleryStudent(BaseModel):
+    student_id: str
+    roll_number: str
+    full_name: str
+    embeddings: List[List[float]]
+
+class SyncGalleryPayload(BaseModel):
+    students: List[SyncGalleryStudent]
+
+@app.post("/api/ai/sync-gallery")
+def sync_gallery(payload: SyncGalleryPayload):
+    """
+    Syncs in-memory student face gallery vectors.
+    """
+    gallery.clear()
+    for s in payload.students:
+        gallery.register_student(
+            student_id=s.student_id,
+            roll_number=s.roll_number,
+            full_name=s.full_name,
+            embeddings=s.embeddings
+        )
+    return {
+        "success": True,
+        "enrolled_students": len(gallery.students),
+        "total_embeddings": len(gallery._index_to_student),
+        "threshold": gallery.similarity_threshold
+    }
+
+@app.get("/api/ai/gallery-status")
+def get_gallery_status():
+    """
+    Returns current in-memory face gallery metrics
+    """
+    return {
+        "enrolled_students_count": len(gallery.students),
+        "total_embeddings_count": len(gallery._index_to_student),
+        "similarity_threshold": gallery.similarity_threshold,
+        "ambiguity_margin": gallery.ambiguity_margin
+    }
+
+class RecognizeFacePayload(BaseModel):
+    image: Optional[str] = None          # Base64 image or crop
+    image_path: Optional[str] = None     # Local image file path
+    embedding: Optional[List[float]] = None # Precomputed 128-d embedding
+    threshold: Optional[float] = None
+
+@app.post("/api/ai/recognize-face")
+def recognize_face(payload: RecognizeFacePayload):
+    """
+    Recognize a face against the enrolled gallery.
+    Returns:
+    - status: 'recognized' | 'unknown' | 'uncertain' | 'no_face'
+    - label: student identity string (e.g. 'CS2026-01 — Arjun Kumar') or 'Unknown'
+    - student_id: str or None
+    - score: float similarity score
+    """
+    if payload.embedding:
+        if len(payload.embedding) != 128:
+            raise HTTPException(status_code=400, detail="Embedding must be 128-dimensional vector.")
+        return gallery.identify_embedding(np.array(payload.embedding), custom_threshold=payload.threshold)
+
+    img = None
+    if payload.image_path and os.path.exists(payload.image_path):
+        img = cv2.imread(payload.image_path)
+    elif payload.image:
+        try:
+            raw_b64 = payload.image
+            if "," in raw_b64:
+                raw_b64 = raw_b64.split(",")[1]
+            img_bytes = base64.b64decode(raw_b64)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to decode base64: {str(e)}")
+
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid image input")
+
+    return gallery.recognize_crop(img, custom_threshold=payload.threshold)
 
 if __name__ == "__main__":
     import uvicorn

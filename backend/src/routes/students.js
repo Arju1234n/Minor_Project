@@ -50,6 +50,9 @@ router.route('/')
   .get(studentController.getStudents)
   .post(upload.array('facePhotos', 5), studentController.createStudent);
 
+// Active Face Gallery export (must be before /:id)
+router.get('/active-gallery', studentController.getActiveGallery);
+
 router.route('/:id')
   .get(studentController.getStudentById)
   .put(upload.array('facePhotos', 5), studentController.updateStudent)

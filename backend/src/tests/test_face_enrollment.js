@@ -27,6 +27,11 @@ async function runTests() {
   assert(fs.existsSync(singleFacePath), 'face_crop_0.jpg must exist in ai-service');
 
   const noFacePath = path.join(testDir, 'test_no_face_wall.jpg');
+  if (!fs.existsSync(noFacePath)) {
+    require('child_process').execSync(
+      `"${path.join(testDir, '.venv/bin/python')}" -c "import cv2, numpy as np; img = np.zeros((300, 300, 3), dtype=np.uint8) + 128; cv2.imwrite('${noFacePath}', img)"`
+    );
+  }
   assert(fs.existsSync(noFacePath), 'test_no_face_wall.jpg must exist in ai-service');
 
   // 2. Test Single Face Requirement: Reject photo with NO FACE

@@ -197,5 +197,6 @@ export const studentAPI = {
     request(`/students/${id}/enrollment`, {
       method: 'DELETE',
     }),
+  getActiveGallery: () => request('/students/active-gallery'),
 };
 

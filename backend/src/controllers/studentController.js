@@ -574,3 +574,56 @@ exports.getStudentEnrollment = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error retrieving enrollment metadata' });
   }
 };
+
+/**
+ * ── Phase 3: Active Student Face Gallery Export ───────────────
+ * Retrieves enrolled student embeddings for AI service in-memory search
+ */
+exports.getActiveGallery = async (req, res) => {
+  try {
+    const students = await Student.find({ status: 'active', enrollmentStatus: 'enrolled' })
+      .select('_id fullName rollNumber department className')
+      .lean();
+
+    if (!students.length) {
+      return res.json({ success: true, count: 0, gallery: [] });
+    }
+
+    const studentIds = students.map((s) => s._id);
+    const embeddings = await FaceEmbedding.find({
+      studentId: { $in: studentIds },
+      isActive: true,
+    }).lean();
+
+    const studentMap = {};
+    students.forEach((s) => {
+      studentMap[s._id.toString()] = {
+        studentId: s._id.toString(),
+        fullName: s.fullName,
+        rollNumber: s.rollNumber,
+        department: s.department,
+        className: s.className,
+        embeddings: [],
+      };
+    });
+
+    embeddings.forEach((emb) => {
+      const sid = emb.studentId.toString();
+      if (studentMap[sid]) {
+        studentMap[sid].embeddings.push(emb.embedding);
+      }
+    });
+
+    const gallery = Object.values(studentMap).filter((s) => s.embeddings.length > 0);
+
+    res.json({
+      success: true,
+      count: gallery.length,
+      gallery,
+    });
+  } catch (err) {
+    console.error('getActiveGallery error:', err);
+    res.status(500).json({ success: false, message: 'Server error retrieving student gallery' });
+  }
+};
+
