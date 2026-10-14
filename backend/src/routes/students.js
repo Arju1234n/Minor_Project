@@ -57,4 +57,9 @@ router.route('/:id')
 
 router.patch('/:id/status', studentController.toggleStudentStatus);
 
+// Face Biometric Enrollment Endpoints — Phase 2
+router.post('/:id/enroll', upload.array('facePhotos', 5), studentController.enrollStudentFace);
+router.get('/:id/enrollment', studentController.getStudentEnrollment);
+router.delete('/:id/enrollment', studentController.deleteStudentEnrollment);
+
 module.exports = router;

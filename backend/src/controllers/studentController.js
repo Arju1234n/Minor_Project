@@ -394,3 +394,183 @@ exports.toggleStudentStatus = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error changing student status' });
   }
 };
+
+/**
+ * ── Phase 2: Face Enrollment & Embedding Generation ───────────
+ * Validates face photographs via AI microservice and saves ArcFace embeddings
+ */
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
+
+exports.enrollStudentFace = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const student = await Student.findById(id);
+
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    // Append newly uploaded photos if provided in this request
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        student.photos.push({
+          filename: file.filename,
+          originalName: file.originalname,
+          path: file.path,
+          mimetype: file.mimetype,
+          size: file.size,
+          uploadedAt: new Date(),
+        });
+      }
+    }
+
+    if (!student.photos || student.photos.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No face photographs found. Please upload at least one clear face portrait.',
+      });
+    }
+
+    const embeddingsToSave = [];
+    const validationErrors = [];
+
+    // Verify each photo with AI service
+    for (let i = 0; i < student.photos.length; i++) {
+      const photo = student.photos[i];
+
+      if (!fs.existsSync(photo.path)) {
+        validationErrors.push(`Photo #${i + 1} (${photo.originalName || 'image'}): File missing on disk.`);
+        continue;
+      }
+
+      try {
+        const aiRes = await fetch(`${AI_SERVICE_URL}/api/ai/enroll-face`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_path: photo.path }),
+        });
+
+        const aiData = await aiRes.json();
+
+        if (!aiRes.ok || !aiData.success) {
+          validationErrors.push(
+            `Photo #${i + 1} (${photo.originalName || 'image'}): ${aiData.error || aiData.detail || 'Face extraction failed'}`
+          );
+        } else {
+          embeddingsToSave.push({
+            embedding: aiData.embedding,
+            confidence: aiData.confidence,
+            model: aiData.model,
+          });
+        }
+      } catch (callErr) {
+        return res.status(503).json({
+          success: false,
+          message: `AI Computer Vision service unavailable at ${AI_SERVICE_URL}. Please ensure ai-service is running.`,
+        });
+      }
+    }
+
+    // If any photo fails single-face criteria, reject enrollment so admin can correct it
+    if (validationErrors.length > 0) {
+      student.enrollmentStatus = 'failed';
+      await student.save();
+      return res.status(400).json({
+        success: false,
+        message: 'Face enrollment validation failed.',
+        errors: validationErrors,
+      });
+    }
+
+    // Replace previous embeddings cleanly
+    await FaceEmbedding.deleteMany({ studentId: student._id });
+
+    // Store new embeddings in MongoDB
+    const embeddingDocs = embeddingsToSave.map((emb, idx) => ({
+      studentId: student._id,
+      embedding: emb.embedding,
+      photoIndex: idx,
+      qualityScore: emb.confidence,
+      modelName: emb.model || 'SFace-ArcFace',
+      isActive: true,
+    }));
+
+    await FaceEmbedding.insertMany(embeddingDocs);
+
+    student.enrollmentStatus = 'enrolled';
+    student.enrolledFaceCount = embeddingDocs.length;
+    await student.save();
+
+    res.json({
+      success: true,
+      message: `Successfully enrolled ${embeddingDocs.length} face photograph(s) for "${student.fullName}".`,
+      student,
+      enrolledCount: embeddingDocs.length,
+    });
+  } catch (err) {
+    console.error('enrollStudentFace error:', err);
+    res.status(500).json({ success: false, message: 'Server error enrolling student face' });
+  }
+};
+
+/**
+ * Delete / Reset student biometric enrollment data
+ */
+exports.deleteStudentEnrollment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const student = await Student.findById(id);
+
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    // Delete face embeddings from database
+    const deleteResult = await FaceEmbedding.deleteMany({ studentId: student._id });
+
+    // Reset student status
+    student.enrollmentStatus = 'pending';
+    student.enrolledFaceCount = 0;
+    await student.save();
+
+    res.json({
+      success: true,
+      message: `Biometric enrollment data wiped for "${student.fullName}". (${deleteResult.deletedCount} embeddings removed)`,
+      student,
+    });
+  } catch (err) {
+    console.error('deleteStudentEnrollment error:', err);
+    res.status(500).json({ success: false, message: 'Server error wiping enrollment data' });
+  }
+};
+
+/**
+ * Get student enrollment status and metadata
+ */
+exports.getStudentEnrollment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const student = await Student.findById(id);
+
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    const embeddings = await FaceEmbedding.find({ studentId: student._id, isActive: true })
+      .select('-embedding') // Do not expose raw vector numbers unless specifically needed
+      .lean();
+
+    res.json({
+      success: true,
+      studentId: student._id,
+      rollNumber: student.rollNumber,
+      fullName: student.fullName,
+      enrollmentStatus: student.enrollmentStatus,
+      enrolledFaceCount: embeddings.length,
+      embeddings,
+    });
+  } catch (err) {
+    console.error('getStudentEnrollment error:', err);
+    res.status(500).json({ success: false, message: 'Server error retrieving enrollment metadata' });
+  }
+};

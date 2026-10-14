@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from detector import HumanDetector
 from tracker import TrackerRegistry
+from face_engine import face_engine
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -170,6 +171,76 @@ def update_config(conf: float = Body(..., embed=True, ge=0.1, le=0.99)):
         "success": True,
         "message": f"Updated confidence threshold to {detector.default_conf}",
         "default_conf": detector.default_conf
+    }
+
+# ──────────────────────────────────────────
+# Face Biometric Enrollment Endpoints — Phase 2
+# ──────────────────────────────────────────
+class FaceEnrollPayload(BaseModel):
+    image: Optional[str] = None       # Base64 encoded JPEG/PNG image
+    image_path: Optional[str] = None  # Local filesystem path (e.g. backend/uploads/faces/...)
+
+@app.post("/api/ai/enroll-face")
+def enroll_face(payload: FaceEnrollPayload):
+    """
+    Validates single-person portrait and extracts 128-d ArcFace embedding.
+    Rejects:
+    - Images with 0 detected faces
+    - Images with >1 detected faces
+    - Faces with inadequate resolution (<40x40px)
+    """
+    img = None
+    if payload.image_path and os.path.exists(payload.image_path):
+        img = cv2.imread(payload.image_path)
+    elif payload.image:
+        try:
+            raw_b64 = payload.image
+            if "," in raw_b64:
+                raw_b64 = raw_b64.split(",")[1]
+            img_bytes = base64.b64decode(raw_b64)
+            nparr = np.frombuffer(img_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to decode base64 image: {str(e)}")
+
+    if img is None:
+        raise HTTPException(status_code=400, detail="Invalid image input or image file could not be read.")
+
+    result = face_engine.enroll_single_image(img)
+    if not result["valid"]:
+        return {
+            "success": False,
+            "error": result["error"],
+            "face_count": result.get("face_count", 0)
+        }
+
+    return {
+        "success": True,
+        "face_count": 1,
+        "confidence": result["confidence"],
+        "bbox": result["bbox"],
+        "embedding": result["embedding"],
+        "model": result["model"]
+    }
+
+class CompareEmbeddingsPayload(BaseModel):
+    embedding1: List[float]
+    embedding2: List[float]
+
+@app.post("/api/ai/compare-embeddings")
+def compare_embeddings(payload: CompareEmbeddingsPayload):
+    """
+    Compute Cosine Similarity between two face embeddings.
+    Cosine score threshold >= 0.363 indicates positive match (FAR 0.1%).
+    """
+    if len(payload.embedding1) != 128 or len(payload.embedding2) != 128:
+        raise HTTPException(status_code=400, detail="Embeddings must be 128-dimensional vectors.")
+
+    sim = face_engine.compute_similarity(np.array(payload.embedding1), np.array(payload.embedding2))
+    return {
+        "similarity": round(sim, 4),
+        "is_match": sim >= 0.363,
+        "threshold": 0.363
     }
 
 if __name__ == "__main__":

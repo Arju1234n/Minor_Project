@@ -187,5 +187,15 @@ export const studentAPI = {
     request(`/students/${id}/status`, {
       method: 'PATCH',
     }),
+  enroll: (id, formData = new FormData()) =>
+    request(`/students/${id}/enroll`, {
+      method: 'POST',
+      body: formData,
+    }),
+  getEnrollment: (id) => request(`/students/${id}/enrollment`),
+  deleteEnrollment: (id) =>
+    request(`/students/${id}/enrollment`, {
+      method: 'DELETE',
+    }),
 };
 

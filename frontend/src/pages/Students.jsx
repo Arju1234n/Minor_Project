@@ -192,6 +192,36 @@ export default function Students() {
     }
   };
 
+  const [enrollingId, setEnrollingId] = useState(null);
+
+  const handleEnroll = async (student) => {
+    try {
+      setEnrollingId(student._id);
+      setError('');
+      const res = await studentAPI.enroll(student._id);
+      setSuccessMsg(res.message || `Face enrollment completed for "${student.fullName}"`);
+      fetchStudents(pagination.page);
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch (err) {
+      setError(err.message || 'Face enrollment failed');
+    } finally {
+      setEnrollingId(null);
+    }
+  };
+
+  const handleWipeEnrollment = async (student) => {
+    if (!confirm(`Wipe biometric face embeddings for "${student.fullName}"?`)) return;
+    try {
+      setError('');
+      await studentAPI.deleteEnrollment(student._id);
+      setSuccessMsg(`Biometric data removed for "${student.fullName}".`);
+      fetchStudents(pagination.page);
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
   const handleToggleStatus = async (id, currentStatus) => {
     try {
       await studentAPI.toggleStatus(id);
@@ -419,21 +449,48 @@ export default function Students() {
                         </div>
                       </td>
                       <td>
-                        <span
-                          className={`badge ${
-                            st.enrollmentStatus === 'enrolled'
-                              ? 'badge-online'
-                              : st.enrolledFaceCount > 0
-                              ? 'badge-warning'
-                              : 'badge-offline'
-                          }`}
-                        >
-                          {st.enrollmentStatus === 'enrolled'
-                            ? `✓ Enrolled (${st.enrolledFaceCount})`
-                            : st.enrolledFaceCount > 0
-                            ? `Pending AI (${st.enrolledFaceCount})`
-                            : 'No Photos'}
-                        </span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-start' }}>
+                          <span
+                            className={`badge ${
+                              st.enrollmentStatus === 'enrolled'
+                                ? 'badge-online'
+                                : st.photos?.length > 0
+                                ? 'badge-warning'
+                                : 'badge-offline'
+                            }`}
+                          >
+                            {st.enrollmentStatus === 'enrolled'
+                              ? `✓ Enrolled (${st.enrolledFaceCount})`
+                              : st.photos?.length > 0
+                              ? `Pending AI (${st.photos.length})`
+                              : 'No Photos'}
+                          </span>
+
+                          {st.photos?.length > 0 && st.enrollmentStatus !== 'enrolled' && (
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-xs"
+                              style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '4px' }}
+                              disabled={enrollingId === st._id}
+                              onClick={() => handleEnroll(st)}
+                              title="Process photos with OpenCV YuNet & SFace ArcFace"
+                            >
+                              {enrollingId === st._id ? 'Enrolling...' : '⚡ Enroll AI'}
+                            </button>
+                          )}
+
+                          {st.enrollmentStatus === 'enrolled' && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs text-muted"
+                              style={{ fontSize: '10px', padding: '1px 4px' }}
+                              onClick={() => handleWipeEnrollment(st)}
+                              title="Delete biometric embeddings"
+                            >
+                              Clear Biometrics
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td>
                         <button
