@@ -53,6 +53,117 @@
   justify-content: center;
 }
 
+.stat-subtext {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+/* ── Hourly Trend Chart ─────────────────────────────── */
+.trend-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.trend-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.trend-card__header .section-title {
+  margin-bottom: 0;
+}
+
+.hourly-bars-container {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  height: 140px;
+  padding: 10px 0 0 0;
+  overflow-x: auto;
+}
+
+.hourly-bar-col {
+  flex: 1;
+  min-width: 38px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.bar-wrapper {
+  width: 100%;
+  height: calc(100% - 20px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  position: relative;
+}
+
+.bar-val {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+  font-family: monospace;
+}
+
+.bar-fill {
+  width: 100%;
+  max-width: 24px;
+  background: linear-gradient(180deg, var(--accent-indigo) 0%, rgba(99, 102, 241, 0.4) 100%);
+  border-radius: 4px 4px 0 0;
+  transition: height 0.3s ease;
+}
+
+.bar-fill:hover {
+  background: var(--accent-indigo);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.6);
+}
+
+.bar-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: monospace;
+}
+
+.section-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-md);
+}
+
+.section-header-row .section-title {
+  margin-bottom: 0;
+}
+
+.text-indigo {
+  color: var(--accent-indigo);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.text-indigo:hover {
+  text-decoration: underline;
+}
+
+.event-item__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* ── Dashboard Grid ─────────────────────────────────── */
 .dashboard-grid {
   display: grid;

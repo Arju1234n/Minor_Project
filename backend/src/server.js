@@ -13,6 +13,8 @@ const connectDB = require('./config/db');
 const authRoutes = require('./routes/auth');
 const cameraRoutes = require('./routes/cameras');
 const dashboardRoutes = require('./routes/dashboard');
+const settingsRoutes = require('./routes/settings');
+const rateLimit = require('express-rate-limit');
 
 // ──────────────────────────────────────────
 // Initialise Express & HTTP server
@@ -21,7 +23,7 @@ const app = express();
 const server = http.createServer(app);
 
 // ──────────────────────────────────────────
-// Socket.IO  (used later for real-time updates)
+// Socket.IO (Signaling & Real-time metrics)
 // ──────────────────────────────────────────
 const io = new SocketIOServer(server, {
   cors: {
@@ -36,21 +38,42 @@ const io = new SocketIOServer(server, {
 app.set('io', io);
 
 // ──────────────────────────────────────────
-// Middleware
+// Security & Rate Limiting Middleware
 // ──────────────────────────────────────────
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false, // allow WebRTC media & local socket streams
+  crossOriginEmbedderPolicy: false,
+}));
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
 if (process.env.NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 }
 
-// ──────────────────────────────────────────
-// API Routes
-// ──────────────────────────────────────────
-app.use('/api/auth', authRoutes);
+// Global API rate limiter (protect against abusive request floods)
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000,                // limit each IP to 1000 requests per windowMs
+  standardHeaders: true,    // Return rate limit info in `RateLimit-*` headers
+  legacyHeaders: false,     // Disable `X-RateLimit-*` headers
+  message: { success: false, message: 'Too many requests, please try again later.' },
+});
+
+// Stricter limiter for authentication endpoints (prevent brute-force password cracking)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,                  // limit each IP to 20 login/register attempts per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many authentication attempts, please try again in 15 minutes.' },
+});
+
+app.use('/api', apiLimiter);
+app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/cameras', cameraRoutes);
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/settings', settingsRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {

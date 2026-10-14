@@ -20,7 +20,7 @@ import {
   HiOutlineArrowNarrowDown,
   HiOutlineBadgeCheck,
 } from 'react-icons/hi';
-import { cameraAPI, dashboardAPI, aiAPI } from '../services/api';
+import { cameraAPI, dashboardAPI, aiAPI, settingsAPI } from '../services/api';
 import { getSocket, fetchIceServers, DEFAULT_ICE_SERVERS } from '../services/webrtc';
 import './LiveMonitoring.css';
 
@@ -90,7 +90,7 @@ export default function LiveMonitoring() {
   const lastRecordTimeRef = useRef(0);
   const lastRecordedCountRef = useRef(-1);
 
-  // Check AI Service Health on mount
+  // Check AI Service Health and Load System Settings on mount
   useEffect(() => {
     aiAPI.getConfig()
       .then((cfg) => {
@@ -98,6 +98,16 @@ export default function LiveMonitoring() {
         if (cfg.default_conf) setConfThreshold(cfg.default_conf);
       })
       .catch(() => setAiServiceStatus('offline'));
+
+    settingsAPI.get()
+      .then((res) => {
+        if (res.settings) {
+          if (res.settings.confidenceThreshold != null) setConfThreshold(res.settings.confidenceThreshold);
+          if (res.settings.virtualTripwireY != null) setTripwireY(res.settings.virtualTripwireY);
+          if (res.settings.enableBreadcrumbs != null) setShowTrails(res.settings.enableBreadcrumbs);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Fetch camera list

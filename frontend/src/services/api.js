@@ -79,6 +79,12 @@ export const dashboardAPI = {
       method: 'POST',
       body: JSON.stringify(eventData),
     }),
+  deleteEvents: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/dashboard/events${query ? `?${query}` : ''}`, {
+      method: 'DELETE',
+    });
+  },
 };
 
 // ── AI Computer Vision Microservice ────────────────────
@@ -130,5 +136,19 @@ export const aiAPI = {
     });
     return res.json();
   },
+};
+
+// ── Settings & Retention ───────────────────────────────
+export const settingsAPI = {
+  get: () => request('/settings'),
+  update: (settings) =>
+    request('/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    }),
+  purgeRetention: () =>
+    request('/settings/purge', {
+      method: 'POST',
+    }),
 };
 
