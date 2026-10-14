@@ -8,11 +8,13 @@ import {
   HiOutlineLogout,
   HiOutlineClipboardList,
   HiOutlineCollection,
+  HiOutlineAcademicCap,
 } from 'react-icons/hi';
 import './Sidebar.css';
 
 const navItems = [
   { to: '/dashboard', icon: HiOutlineViewGrid, label: 'Dashboard' },
+  { to: '/students', icon: HiOutlineAcademicCap, label: 'Students' },
   { to: '/cameras', icon: HiOutlineVideoCamera, label: 'Cameras' },
   { to: '/monitoring', icon: HiOutlineEye, label: 'Live Monitor' },
   { to: '/history', icon: HiOutlineClipboardList, label: 'History' },

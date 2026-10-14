@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
-    "seed": "node src/seed.js"
+    "seed": "node src/seed.js",
+    "test:students": "node src/tests/test_students.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -19,6 +20,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.7.0",
     "morgan": "^1.10.0",
+    "multer": "^2.4.0",
     "socket.io": "^4.7.5",
     "uuid": "^10.0.0"
   },

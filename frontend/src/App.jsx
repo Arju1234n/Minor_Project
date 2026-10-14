@@ -6,6 +6,7 @@ import DashboardLayout from './components/DashboardLayout';
 // Pages
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Students from './pages/Students';
 import Cameras from './pages/Cameras';
 import LiveMonitoring from './pages/LiveMonitoring';
 import History from './pages/History';
@@ -31,6 +32,7 @@ export default function App() {
             }
           >
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/students" element={<Students />} />
             <Route path="/cameras" element={<Cameras />} />
             <Route path="/monitoring" element={<LiveMonitoring />} />
             <Route path="/history" element={<History />} />

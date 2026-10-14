@@ -5,14 +5,20 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
  */
 async function request(endpoint, options = {}) {
   const token = localStorage.getItem('token');
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+
+  const headers = {
+    ...(token && { Authorization: `Bearer ${token}` }),
+    ...options.headers,
+  };
+
+  if (!isFormData) {
+    headers['Content-Type'] = 'application/json';
+  }
 
   const config = {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...options.headers,
-    },
     ...options,
+    headers,
   };
 
   const res = await fetch(`${API_URL}${endpoint}`, config);
@@ -153,6 +159,33 @@ export const settingsAPI = {
   purgeRetention: () =>
     request('/settings/purge', {
       method: 'POST',
+    }),
+};
+
+// ── Students & Face Enrollment ─────────────────────────
+export const studentAPI = {
+  list: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/students${query ? `?${query}` : ''}`);
+  },
+  getById: (id) => request(`/students/${id}`),
+  create: (formData) =>
+    request('/students', {
+      method: 'POST',
+      body: formData,
+    }),
+  update: (id, formData) =>
+    request(`/students/${id}`, {
+      method: 'PUT',
+      body: formData,
+    }),
+  delete: (id, permanent = false) =>
+    request(`/students/${id}${permanent ? '?permanent=true' : ''}`, {
+      method: 'DELETE',
+    }),
+  toggleStatus: (id) =>
+    request(`/students/${id}/status`, {
+      method: 'PATCH',
     }),
 };
 

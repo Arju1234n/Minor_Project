@@ -14,6 +14,7 @@ const authRoutes = require('./routes/auth');
 const cameraRoutes = require('./routes/cameras');
 const dashboardRoutes = require('./routes/dashboard');
 const settingsRoutes = require('./routes/settings');
+const studentRoutes = require('./routes/students');
 const rateLimit = require('express-rate-limit');
 
 // ──────────────────────────────────────────
@@ -74,6 +75,7 @@ app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/cameras', cameraRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/students', studentRoutes);
 
 // Health check
 app.get('/api/health', (_req, res) => {
