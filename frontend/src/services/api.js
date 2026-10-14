@@ -85,13 +85,16 @@ export const dashboardAPI = {
 const AI_URL = import.meta.env.VITE_AI_URL || 'http://localhost:8000';
 
 export const aiAPI = {
-  detectFrame: async (base64Image, confThreshold = 0.45) => {
+  detectFrame: async (base64Image, confThreshold = 0.40, sessionId = 'default', tripwireY = 0.50, enableTracking = true) => {
     const res = await fetch(`${AI_URL}/api/ai/detect-frame`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         image: base64Image,
+        session_id: sessionId,
         conf_threshold: confThreshold,
+        tripwire_y: tripwireY,
+        enable_tracking: enableTracking,
         return_annotated: false,
       }),
     });
@@ -99,6 +102,18 @@ export const aiAPI = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'AI detection failed');
     }
+    return res.json();
+  },
+
+  resetSession: async (sessionId) => {
+    const res = await fetch(`${AI_URL}/api/ai/reset-session/${sessionId}`, {
+      method: 'POST',
+    });
+    return res.json();
+  },
+
+  getSessionMetrics: async (sessionId) => {
+    const res = await fetch(`${AI_URL}/api/ai/session/${sessionId}`);
     return res.json();
   },
 

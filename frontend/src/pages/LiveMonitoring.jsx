@@ -16,19 +16,30 @@ import {
   HiOutlineAdjustments,
   HiOutlineLightningBolt,
   HiOutlineSparkles,
+  HiOutlineArrowNarrowUp,
+  HiOutlineArrowNarrowDown,
+  HiOutlineBadgeCheck,
 } from 'react-icons/hi';
 import { cameraAPI, dashboardAPI, aiAPI } from '../services/api';
 import { getSocket, fetchIceServers, DEFAULT_ICE_SERVERS } from '../services/webrtc';
 import './LiveMonitoring.css';
 
 /**
- * Live Monitoring Page — Phase 5:
- * - Real-time WebRTC peer connection from smartphone camera
- * - Automated frame extraction & YOLOv8 human detection (person class only)
- * - Canvas overlay with responsive neon bounding boxes & confidence score tags
- * - Live people count counter and inference latency metrics
- * - Configurable detection threshold & overlay visibility controls
- * - Detection events recording into MongoDB for session history
+ * Generate a consistent, vibrant HSL color for a given tracking ID
+ */
+function getTrackingColor(id) {
+  const hue = ((id || 1) * 137.508) % 360; // Golden angle for optimal visual distinctiveness
+  return `hsl(${hue}, 85%, 55%)`;
+}
+
+/**
+ * Live Monitoring Page — Phase 6:
+ * - Real-time WebRTC live video receiver from smartphone
+ * - ByteTrack multi-person tracking with persistent IDs
+ * - Movement trajectory trails (breadcrumbs) per person
+ * - Virtual Tripwire line crossing analysis (IN / OUT counters)
+ * - Virtual Zone occupancy detection
+ * - Real-time session analytics & MongoDB persistence
  */
 export default function LiveMonitoring() {
   const [searchParams] = useSearchParams();
@@ -54,12 +65,23 @@ export default function LiveMonitoring() {
   const [copied, setCopied] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // ── Phase 5: AI Computer Vision State ────────────────
+  // ── Phase 5 & 6: AI Detection & ByteTrack Tracking State ──
   const [aiEnabled, setAiEnabled] = useState(true);
+  const [enableTracking, setEnableTracking] = useState(true);
   const [showBoxes, setShowBoxes] = useState(true);
   const [showConfidence, setShowConfidence] = useState(true);
-  const [confThreshold, setConfThreshold] = useState(0.45);
+  const [showTrails, setShowTrails] = useState(true);
+  const [showTripwire, setShowTripwire] = useState(true);
+  const [showZone, setShowZone] = useState(false);
+  const [confThreshold, setConfThreshold] = useState(0.40);
+  const [tripwireY, setTripwireY] = useState(0.50);
+
+  // Real-time tracking counters
   const [peopleCount, setPeopleCount] = useState(0);
+  const [uniqueIdsCount, setUniqueIdsCount] = useState(0);
+  const [tripwireEntered, setTripwireEntered] = useState(0);
+  const [tripwireExited, setTripwireExited] = useState(0);
+  const [zoneCount, setZoneCount] = useState(0);
   const [inferenceTimeMs, setInferenceTimeMs] = useState(0);
   const [aiServiceStatus, setAiServiceStatus] = useState('checking'); // 'online' | 'offline' | 'checking'
   const [activeDetections, setActiveDetections] = useState([]);
@@ -127,6 +149,27 @@ export default function LiveMonitoring() {
     setPeopleCount(0);
     setActiveDetections([]);
   }, []);
+
+  /**
+   * Reset ByteTrack tracking state and counters for active session
+   */
+  const handleResetTracking = async () => {
+    if (!selectedSessionId) return;
+    try {
+      await aiAPI.resetSession(selectedSessionId);
+      setUniqueIdsCount(0);
+      setTripwireEntered(0);
+      setTripwireExited(0);
+      setZoneCount(0);
+      setActiveDetections([]);
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+    } catch (err) {
+      console.warn('Failed to reset tracker:', err.message);
+    }
+  };
 
   /**
    * Initialize Socket.IO connection & WebRTC listener for the selected session
@@ -264,14 +307,13 @@ export default function LiveMonitoring() {
   }, [selectedSessionId, cleanupPeerConnection]);
 
   // ──────────────────────────────────────────
-  // Phase 5: Draw Bounding Boxes on Overlay Canvas
+  // Phase 6: Canvas Overlays — Bounding Boxes, IDs, Trails, Tripwire & Zone
   // ──────────────────────────────────────────
   const drawDetections = useCallback((detections) => {
     const canvas = canvasRef.current;
     const video = remoteVideoRef.current;
     if (!canvas || !video) return;
 
-    // Synchronize internal canvas resolution with rendered viewport size
     const rect = video.getBoundingClientRect();
     if (canvas.width !== rect.width || canvas.height !== rect.height) {
       canvas.width = rect.width;
@@ -283,71 +325,161 @@ export default function LiveMonitoring() {
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    if (!showBoxes || !detections || detections.length === 0) return;
+    // 1. Draw Virtual Tripwire Line (if enabled)
+    if (showTripwire) {
+      const lineYPixel = tripwireY * h;
 
-    detections.forEach((det, idx) => {
-      let x = det.bbox.x;
-      let y = det.bbox.y;
-      let boxW = det.bbox.width;
-      let boxH = det.bbox.height;
-
-      // Use normalized coordinates scaled to rendered canvas viewport
-      if (det.normalized_bbox) {
-        x = det.normalized_bbox.x * w;
-        y = det.normalized_bbox.y * h;
-        boxW = det.normalized_bbox.width * w;
-        boxH = det.normalized_bbox.height * h;
-      }
-
-      const confPercent = Math.round((det.confidence || 0) * 100);
-
-      // Neon Emerald Green bounding box with glow
-      ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 2.5;
-      ctx.shadowColor = 'rgba(16, 185, 129, 0.7)';
-      ctx.shadowBlur = 8;
-
+      ctx.save();
+      ctx.strokeStyle = '#f59e0b'; // Amber tripwire
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
       ctx.beginPath();
-      if (ctx.roundRect) {
-        ctx.roundRect(x, y, boxW, boxH, 6);
-      } else {
-        ctx.rect(x, y, boxW, boxH);
-      }
+      ctx.moveTo(0, lineYPixel);
+      ctx.lineTo(w, lineYPixel);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Tripwire Badge Label
+      const lineTag = `TRIPWIRE (▲ IN: ${tripwireEntered} | ▼ OUT: ${tripwireExited})`;
+      ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+      const twMetrics = ctx.measureText(lineTag);
+      const twW = twMetrics.width + 16;
+      const twX = w / 2 - twW / 2;
+      const twY = Math.max(4, lineYPixel - 22);
+
+      ctx.fillStyle = 'rgba(245, 158, 11, 0.9)';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(twX, twY, twW, 20, 4);
+      else ctx.fillRect(twX, twY, twW, 20);
+      ctx.fill();
+
+      ctx.fillStyle = '#0f172a';
+      ctx.fillText(lineTag, twX + 8, twY + 14);
+      ctx.restore();
+    }
+
+    // 2. Draw Virtual Zone (if enabled)
+    if (showZone) {
+      const zx1 = 0.2 * w;
+      const zy1 = 0.2 * h;
+      const zw = 0.6 * w;
+      const zh = 0.6 * h;
+
+      ctx.save();
+      ctx.strokeStyle = '#38bdf8'; // Sky blue
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 6]);
+      ctx.fillStyle = 'rgba(56, 189, 248, 0.08)';
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(zx1, zy1, zw, zh, 8);
+      else ctx.rect(zx1, zy1, zw, zh);
+      ctx.fill();
       ctx.stroke();
 
-      ctx.shadowBlur = 0; // reset shadow
+      const zoneTag = `MONITORED ZONE (${zoneCount} INSIDE)`;
+      ctx.font = 'bold 10px Inter, system-ui, sans-serif';
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillText(zoneTag, zx1 + 10, zy1 + 18);
+      ctx.restore();
+    }
 
-      // Draw Badge Tag
-      if (showConfidence) {
-        const tagText = `Person #${idx + 1} (${confPercent}%)`;
-        ctx.font = 'bold 11px Inter, system-ui, sans-serif';
-        const textMetrics = ctx.measureText(tagText);
-        const tagW = textMetrics.width + 12;
-        const tagH = 20;
-        const tagY = Math.max(0, y - tagH);
+    if (!detections || detections.length === 0) return;
 
-        ctx.fillStyle = '#10b981';
-        ctx.beginPath();
-        if (ctx.roundRect) {
-          ctx.roundRect(x, tagY, tagW, tagH, [4, 4, 0, 0]);
-        } else {
-          ctx.fillRect(x, tagY, tagW, tagH);
+    // 3. Draw Trajectory Trails (Breadcrumbs)
+    if (showTrails) {
+      detections.forEach((det) => {
+        const id = det.tracking_id || 1;
+        const color = getTrackingColor(id);
+        const trail = det.trajectory || [];
+
+        if (trail.length > 1) {
+          ctx.save();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          trail.forEach((pt, i) => {
+            const px = pt.x * w;
+            const py = pt.y * h;
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          });
+          ctx.stroke();
+
+          // Draw small glow dots along path
+          trail.forEach((pt) => {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(pt.x * w, pt.y * h, 3, 0, Math.PI * 2);
+            ctx.fill();
+          });
+          ctx.restore();
         }
-        ctx.fill();
+      });
+    }
 
-        ctx.fillStyle = '#0f172a';
-        ctx.fillText(tagText, x + 6, tagY + 14);
-      }
-    });
-  }, [showBoxes, showConfidence]);
+    // 4. Draw Bounding Boxes and Tracking ID Badges
+    if (showBoxes) {
+      detections.forEach((det) => {
+        const id = det.tracking_id || 1;
+        const color = getTrackingColor(id);
 
-  // Re-render bounding boxes if display settings change
+        let x = det.bbox.x;
+        let y = det.bbox.y;
+        let boxW = det.bbox.width;
+        let boxH = det.bbox.height;
+
+        if (det.normalized_bbox) {
+          x = det.normalized_bbox.x * w;
+          y = det.normalized_bbox.y * h;
+          boxW = det.normalized_bbox.width * w;
+          boxH = det.normalized_bbox.height * h;
+        }
+
+        const confPercent = Math.round((det.confidence || 0) * 100);
+
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 8;
+
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(x, y, boxW, boxH, 6);
+        else ctx.rect(x, y, boxW, boxH);
+        ctx.stroke();
+
+        ctx.shadowBlur = 0;
+
+        // Tracking ID + Confidence Badge
+        if (showConfidence) {
+          const tagText = `ID #${id} (${confPercent}%)`;
+          ctx.font = 'bold 11px Inter, system-ui, sans-serif';
+          const textMetrics = ctx.measureText(tagText);
+          const tagW = textMetrics.width + 12;
+          const tagH = 20;
+          const tagY = Math.max(0, y - tagH);
+
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(x, tagY, tagW, tagH, [4, 4, 0, 0]);
+          else ctx.fillRect(x, tagY, tagW, tagH);
+          ctx.fill();
+
+          ctx.fillStyle = '#0f172a';
+          ctx.fillText(tagText, x + 6, tagY + 14);
+        }
+        ctx.restore();
+      });
+    }
+  }, [showBoxes, showConfidence, showTrails, showTripwire, showZone, tripwireY, tripwireEntered, tripwireExited, zoneCount]);
+
+  // Re-render canvas overlays if settings change
   useEffect(() => {
     drawDetections(activeDetections);
   }, [drawDetections, activeDetections]);
 
   // ──────────────────────────────────────────
-  // Phase 5: Real-time Frame Extraction & YOLO Detection Pipeline
+  // Phase 6: Frame Extraction & ByteTrack Tracking Loop
   // ──────────────────────────────────────────
   useEffect(() => {
     if (connectionStatus !== 'connected' || !aiEnabled) {
@@ -360,13 +492,12 @@ export default function LiveMonitoring() {
       return;
     }
 
-    // Hidden extraction canvas (640x360 for high-speed inference)
     const offscreenCanvas = document.createElement('canvas');
     offscreenCanvas.width = 640;
     offscreenCanvas.height = 360;
     const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
 
-    const detectionInterval = setInterval(async () => {
+    const trackingInterval = setInterval(async () => {
       const video = remoteVideoRef.current;
       if (!video || video.readyState < 2 || isDetectingRef.current) return;
 
@@ -376,7 +507,13 @@ export default function LiveMonitoring() {
         offscreenCtx.drawImage(video, 0, 0, 640, 360);
         const base64Data = offscreenCanvas.toDataURL('image/jpeg', 0.65);
 
-        const data = await aiAPI.detectFrame(base64Data, confThreshold);
+        const data = await aiAPI.detectFrame(
+          base64Data,
+          confThreshold,
+          selectedSessionId || 'default',
+          tripwireY,
+          enableTracking
+        );
         setAiServiceStatus('online');
 
         if (data.success) {
@@ -385,9 +522,20 @@ export default function LiveMonitoring() {
           setActiveDetections(detections);
           setInferenceTimeMs(data.inference_time_ms || 0);
 
+          if (data.unique_ids_count !== undefined) {
+            setUniqueIdsCount(data.unique_ids_count);
+          }
+          if (data.tripwire) {
+            setTripwireEntered(data.tripwire.entered);
+            setTripwireExited(data.tripwire.exited);
+          }
+          if (data.zone) {
+            setZoneCount(data.zone.inside_count);
+          }
+
           drawDetections(detections);
 
-          // Periodically log detection events into database (every 4 seconds or on people count change)
+          // Periodically log tracking event into MongoDB
           const now = Date.now();
           const countChanged = lastRecordedCountRef.current !== detections.length;
           const timeElapsed = now - lastRecordTimeRef.current > 4000;
@@ -398,8 +546,8 @@ export default function LiveMonitoring() {
             dashboardAPI.recordEvent({
               sessionId: selectedSessionId,
               peopleCount: detections.length,
-              detections: detections.map((d, i) => ({
-                trackingId: i + 1,
+              detections: detections.map((d) => ({
+                trackingId: d.tracking_id || 1,
                 confidence: d.confidence,
                 bbox: d.bbox,
               })),
@@ -407,17 +555,17 @@ export default function LiveMonitoring() {
           }
         }
       } catch (err) {
-        console.warn('AI Frame inference error:', err.message);
+        console.warn('ByteTrack inference error:', err.message);
         setAiServiceStatus('offline');
       } finally {
         isDetectingRef.current = false;
       }
-    }, 280); // Run inference ~3.5 times per second
+    }, 280);
 
-    return () => clearInterval(detectionInterval);
-  }, [connectionStatus, aiEnabled, confThreshold, selectedSessionId, drawDetections]);
+    return () => clearInterval(trackingInterval);
+  }, [connectionStatus, aiEnabled, enableTracking, confThreshold, tripwireY, selectedSessionId, drawDetections]);
 
-  // Update metadata when video dimensions change
+  // Loaded metadata
   const handleLoadedMetadata = () => {
     if (!remoteVideoRef.current) return;
     const width = remoteVideoRef.current.videoWidth;
@@ -426,7 +574,7 @@ export default function LiveMonitoring() {
   };
 
   /**
-   * Toggle fullscreen for video container
+   * Toggle fullscreen
    */
   const handleToggleFullscreen = () => {
     const el = document.getElementById('monitoring-player-container');
@@ -459,9 +607,9 @@ export default function LiveMonitoring() {
       {/* Header */}
       <div className="page-header">
         <div>
-          <h1 className="page-title">Live Remote Monitoring</h1>
+          <h1 className="page-title">Live Remote Monitoring & Tracking</h1>
           <p className="page-subtitle">
-            Real-time WebRTC video feed with live YOLOv8 human detection overlays
+            Real-time WebRTC video stream with YOLOv8 human detection & ByteTrack multi-person trajectory tracking
           </p>
         </div>
 
@@ -533,7 +681,7 @@ export default function LiveMonitoring() {
               onLoadedMetadata={handleLoadedMetadata}
             />
 
-            {/* Canvas overlay for Phase 5 bounding boxes */}
+            {/* Canvas overlay for Phase 6 bounding boxes, IDs, trails, & tripwire */}
             <canvas ref={canvasRef} className="detection-canvas-overlay" />
 
             {/* Fallback Viewport when Stream is Offline or Connecting */}
@@ -577,18 +725,25 @@ export default function LiveMonitoring() {
                 {aiEnabled && (
                   <div className="hud-badge ai-badge">
                     <HiOutlineUsers size={14} />
-                    <strong>{peopleCount}</strong> {peopleCount === 1 ? 'PERSON' : 'PEOPLE'}
+                    <strong>{peopleCount}</strong> IN VIEW
+                  </div>
+                )}
+                {aiEnabled && enableTracking && (
+                  <div className="hud-badge unique-badge">
+                    <HiOutlineBadgeCheck size={14} />
+                    <strong>{uniqueIdsCount}</strong> UNIQUE IDS
+                  </div>
+                )}
+                {aiEnabled && showTripwire && (
+                  <div className="hud-badge tripwire-badge">
+                    <span>▲ IN: {tripwireEntered}</span>
+                    <span>▼ OUT: {tripwireExited}</span>
                   </div>
                 )}
                 {aiEnabled && inferenceTimeMs > 0 && (
                   <div className="hud-badge fps-badge">
                     <HiOutlineLightningBolt size={14} />
                     {inferenceTimeMs}ms
-                  </div>
-                )}
-                {streamStats && (
-                  <div className="hud-badge">
-                    {streamStats.width}×{streamStats.height}
                   </div>
                 )}
               </div>
@@ -631,52 +786,52 @@ export default function LiveMonitoring() {
           {/* Quick Stream Info Footer */}
           <div className="stream-footer-info">
             <span>Transmission: <strong>Direct WebRTC (P2P)</strong></span>
-            <span>AI Model: <strong>YOLOv8 Nano (Person Only)</strong></span>
+            <span>Tracker: <strong>YOLOv8 + ByteTrack (Persistent IDs)</strong></span>
             <span>Status: <strong className={aiServiceStatus === 'online' ? 'text-success' : 'text-danger'}>{aiServiceStatus.toUpperCase()}</strong></span>
           </div>
         </div>
 
-        {/* Right Sidebar: Camera Selection & AI Controls */}
+        {/* Right Sidebar: AI & Tracking Controls */}
         <div className="monitoring-sidebar">
-          {/* Phase 5: Real-Time AI Detection Control Card */}
-          <div className="glass-card ai-control-card">
+          {/* Phase 6: ByteTrack Multi-Person Tracking Card */}
+          <div className="glass-card tracking-control-card">
             <h3 className="sidebar-card-title">
-              <HiOutlineSparkles size={18} /> AI Detection Controls
+              <HiOutlineSparkles size={18} /> ByteTrack & Spatial Analytics
             </h3>
             <p className="sidebar-card-desc">
-              YOLOv8 neural network inference on incoming live frames:
+              Multi-person tracking, persistent IDs, and virtual line crossing:
             </p>
 
-            {/* AI Toggle Switch */}
+            {/* Tracking Toggle */}
             <div className="control-toggle-row">
-              <span className="control-toggle-label">Human Detection:</span>
+              <span className="control-toggle-label">ByteTrack Multi-Person:</span>
               <button
                 type="button"
-                className={`btn btn-sm ${aiEnabled ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setAiEnabled(!aiEnabled)}
+                className={`btn btn-sm ${enableTracking ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setEnableTracking(!enableTracking)}
               >
-                {aiEnabled ? 'ENABLED' : 'PAUSED'}
+                {enableTracking ? 'TRACKING ON' : 'DETECTION ONLY'}
               </button>
             </div>
 
-            {/* Confidence Threshold Slider */}
+            {/* Tripwire Line Position Slider */}
             <div className="slider-control-group">
               <div className="slider-label-row">
-                <span>Confidence Threshold:</span>
-                <span className="slider-value">{Math.round(confThreshold * 100)}%</span>
+                <span>Virtual Tripwire Position:</span>
+                <span className="slider-value">{Math.round(tripwireY * 100)}%</span>
               </div>
               <input
                 type="range"
-                min="0.20"
-                max="0.85"
+                min="0.10"
+                max="0.90"
                 step="0.05"
-                value={confThreshold}
-                onChange={(e) => setConfThreshold(parseFloat(e.target.value))}
+                value={tripwireY}
+                onChange={(e) => setTripwireY(parseFloat(e.target.value))}
                 className="ai-slider"
               />
             </div>
 
-            {/* Bounding Box Visibility Checkboxes */}
+            {/* Overlays Visibility Toggles */}
             <div className="checkbox-control-group">
               <label className="checkbox-label">
                 <input
@@ -684,35 +839,63 @@ export default function LiveMonitoring() {
                   checked={showBoxes}
                   onChange={(e) => setShowBoxes(e.target.checked)}
                 />
-                Show Bounding Boxes
+                Show Bounding Boxes & IDs
               </label>
               <label className="checkbox-label">
                 <input
                   type="checkbox"
-                  checked={showConfidence}
-                  onChange={(e) => setShowConfidence(e.target.checked)}
+                  checked={showTrails}
+                  onChange={(e) => setShowTrails(e.target.checked)}
                 />
-                Show Confidence Scores
+                Show Trajectory Trails (Breadcrumbs)
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showTripwire}
+                  onChange={(e) => setShowTripwire(e.target.checked)}
+                />
+                Show Virtual Tripwire (In / Out)
+              </label>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={showZone}
+                  onChange={(e) => setShowZone(e.target.checked)}
+                />
+                Show Monitored Zone
               </label>
             </div>
 
-            {/* AI Stats Pill Box */}
-            <div className="ai-stats-pill-box">
-              <div className="stat-pill">
-                <span className="stat-pill-label">Detected Now</span>
-                <span className="stat-pill-val text-success">{peopleCount}</span>
+            {/* Session Tracking KPI Metrics */}
+            <div className="tracking-metrics-grid">
+              <div className="metric-box">
+                <span className="metric-title">Active People</span>
+                <span className="metric-val text-success">{peopleCount}</span>
               </div>
-              <div className="stat-pill">
-                <span className="stat-pill-label">Inference Time</span>
-                <span className="stat-pill-val text-info">{inferenceTimeMs}ms</span>
+              <div className="metric-box">
+                <span className="metric-title">Total Unique IDs</span>
+                <span className="metric-val text-info">{uniqueIdsCount}</span>
               </div>
-              <div className="stat-pill">
-                <span className="stat-pill-label">AI Engine</span>
-                <span className={`stat-pill-val ${aiServiceStatus === 'online' ? 'text-success' : 'text-danger'}`}>
-                  {aiServiceStatus}
-                </span>
+              <div className="metric-box">
+                <span className="metric-title">Line Crossed (In)</span>
+                <span className="metric-val text-warning">{tripwireEntered}</span>
+              </div>
+              <div className="metric-box">
+                <span className="metric-title">Line Crossed (Out)</span>
+                <span className="metric-val text-danger">{tripwireExited}</span>
               </div>
             </div>
+
+            {/* Reset Tracker Button */}
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm btn-block"
+              onClick={handleResetTracking}
+              title="Reset tracking IDs, trajectories, and tripwire counts for this session"
+            >
+              <HiOutlineRefresh size={14} /> Reset Session Tracking
+            </button>
           </div>
 
           {/* Active Session Switcher Card */}
