@@ -23,7 +23,6 @@ const recognitionEventSchema = new mongoose.Schema(
     timestamp: {
       type: Date,
       default: Date.now,
-      index: true,
     },
     // Bounding box of the recognized face/person in frame
     bbox: {
