@@ -1,10 +1,12 @@
 import base64
 import os
 import time
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 import cv2
 import numpy as np
 from fastapi import FastAPI, File, UploadFile, Query, HTTPException, Body
+from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -12,6 +14,9 @@ from detector import HumanDetector
 from tracker import TrackerRegistry
 from face_engine import face_engine
 from recognition_service import gallery
+
+last_gallery_sync_time: Optional[str] = None
+from cctv_engine import cctv_engine, CCTVWorker
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -53,10 +58,11 @@ def startup_event():
     global detector, tracker_registry
     model_name = os.getenv("YOLO_MODEL", "yolov8n.pt")
     default_conf = float(os.getenv("DETECTION_CONFIDENCE", "0.40"))
-    detector = HumanDetector(model_name=model_name, default_conf=default_conf)
-    tracker_registry = TrackerRegistry(model_name=model_name)
+    device = os.getenv("YOLO_DEVICE")
+    detector = HumanDetector(model_name=model_name, default_conf=default_conf, device=device)
+    tracker_registry = TrackerRegistry(model_name=model_name, device=device)
     sync_gallery_from_backend()
-    print("🚀 AI Service startup complete. YOLOv8, ByteTrack, and Facial Recognition ready.")
+    print(f"🚀 AI Service startup complete. Model: {model_name}, Device: {detector.device}, ByteTrack, and Facial Recognition ready.")
 
 @app.post("/api/ai/sync-gallery-from-backend")
 def trigger_sync_from_backend():
@@ -86,6 +92,7 @@ def health_check():
         "detector_loaded": detector is not None,
         "tracker_loaded": tracker_registry is not None,
         "model": detector.model_name if detector else None,
+        "device": detector.device if detector else None,
         "default_conf": detector.default_conf if detector else None,
         "target_class": "person (ID 0)",
         "multi_person_tracking": "ByteTrack"
@@ -99,7 +106,7 @@ async def detect_base64_frame(payload: Base64FramePayload):
     if detector is None or tracker_registry is None:
         raise HTTPException(status_code=503, detail="AI Service not initialized")
 
-    t0 = time.time()
+    t0 = time.perf_counter()
     try:
         raw_b64 = payload.image
         if "," in raw_b64:
@@ -112,6 +119,7 @@ async def detect_base64_frame(payload: Base64FramePayload):
         if frame is None:
             raise HTTPException(status_code=400, detail="Could not decode base64 image")
 
+        decode_time_ms = round((time.perf_counter() - t0) * 1000, 2)
         session_id = payload.session_id or "default"
 
         if payload.enable_tracking:
@@ -121,18 +129,24 @@ async def detect_base64_frame(payload: Base64FramePayload):
                 conf_threshold=payload.conf_threshold,
                 tripwire_y=payload.tripwire_y
             )
-            inference_time_ms = round((time.time() - t0) * 1000, 2)
+            total_time_ms = round((time.perf_counter() - t0) * 1000, 2)
             result["success"] = True
-            result["inference_time_ms"] = inference_time_ms
+            result["inference_time_ms"] = total_time_ms
             result["image_size"] = {"width": frame.shape[1], "height": frame.shape[0]}
+            if "telemetry" in result:
+                result["telemetry"]["decode_time_ms"] = decode_time_ms
+                result["telemetry"]["total_server_time_ms"] = total_time_ms
             return result
         else:
             # Simple YOLO detection without ByteTrack persistence
+            t_det0 = time.perf_counter()
             detections, _, inf_time = detector.detect_frame(
                 frame,
                 conf_threshold=payload.conf_threshold,
                 draw_boxes=False
             )
+            t_det_ms = round((time.perf_counter() - t_det0) * 1000, 2)
+            t_rec0 = time.perf_counter()
             h, w = frame.shape[:2]
             for idx, d in enumerate(detections):
                 x = d["bbox"]["x"]
@@ -165,6 +179,7 @@ async def detect_base64_frame(payload: Base64FramePayload):
                     d["full_name"] = rec_res.get("full_name")
                     d["roll_number"] = rec_res.get("roll_number")
                     d["similarity"] = rec_res.get("score", 0.0)
+                    d["tracking_id"] = idx + 1
                     if rec_res.get("face_box"):
                         fb = rec_res["face_box"]
                         d["face_box"] = {
@@ -173,9 +188,17 @@ async def detect_base64_frame(payload: Base64FramePayload):
                             "width": fb["width"],
                             "height": fb["height"],
                         }
+                        d["normalized_face_box"] = {
+                            "x": round((head_x1 + fb["x"]) / w, 4),
+                            "y": round((head_y1 + fb["y"]) / h, 4),
+                            "width": round(fb["width"] / w, 4),
+                            "height": round(fb["height"] / h, 4),
+                        }
                     else:
                         d["face_box"] = None
+                        d["normalized_face_box"] = None
                 else:
+                    d["tracking_id"] = idx + 1
                     d["identity_status"] = "unavailable"
                     d["label"] = "Identity unavailable"
                     d["student_id"] = None
@@ -183,6 +206,29 @@ async def detect_base64_frame(payload: Base64FramePayload):
                     d["roll_number"] = None
                     d["similarity"] = 0.0
                     d["face_box"] = None
+                    d["normalized_face_box"] = None
+
+            # Multi-person identity conflict resolution
+            best_match_by_student = {}
+            for d in detections:
+                if d.get("identity_status") == "recognized" and d.get("student_id"):
+                    sid = str(d["student_id"])
+                    sim = d.get("similarity", 0.0)
+                    if sid not in best_match_by_student or sim > best_match_by_student[sid]["similarity"]:
+                        best_match_by_student[sid] = {
+                            "tracking_id": d["tracking_id"],
+                            "similarity": sim
+                        }
+
+            for d in detections:
+                if d.get("identity_status") == "recognized" and d.get("student_id"):
+                    sid = str(d["student_id"])
+                    if best_match_by_student[sid]["tracking_id"] != d["tracking_id"]:
+                        d["identity_status"] = "unknown"
+                        d["label"] = "Unknown"
+                        d["student_id"] = None
+                        d["full_name"] = None
+                        d["roll_number"] = None
 
             recognized_students = [
                 {
@@ -190,10 +236,13 @@ async def detect_base64_frame(payload: Base64FramePayload):
                     "full_name": d["full_name"],
                     "roll_number": d["roll_number"],
                     "similarity": d["similarity"],
-                    "tracking_id": idx + 1
+                    "tracking_id": d["tracking_id"]
                 }
-                for idx, d in enumerate(detections) if d.get("identity_status") == "recognized"
+                for d in detections if d.get("identity_status") == "recognized"
             ]
+
+            t_rec_ms = round((time.perf_counter() - t_rec0) * 1000, 2)
+            total_time_ms = round((time.perf_counter() - t0) * 1000, 2)
 
             return {
                 "success": True,
@@ -203,9 +252,18 @@ async def detect_base64_frame(payload: Base64FramePayload):
                 "recognized_count": len(recognized_students),
                 "unrecognized_count": len(detections) - len(recognized_students),
                 "recognized_students": recognized_students,
+                "gallery_count": len(gallery.students),
                 "detections": detections,
-                "inference_time_ms": inf_time,
-                "image_size": {"width": frame.shape[1], "height": frame.shape[0]}
+                "inference_time_ms": total_time_ms,
+                "image_size": {"width": frame.shape[1], "height": frame.shape[0]},
+                "telemetry": {
+                    "detection_time_ms": t_det_ms,
+                    "recognition_time_ms": t_rec_ms,
+                    "decode_time_ms": decode_time_ms,
+                    "total_processing_time_ms": total_time_ms,
+                    "device": detector.device,
+                    "model_name": detector.model_name
+                }
             }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -242,26 +300,64 @@ def get_session_metrics(session_id: str):
 # ──────────────────────────────────────────
 # Configuration Endpoint
 # ──────────────────────────────────────────
+class AIConfigUpdatePayload(BaseModel):
+    conf: Optional[float] = None
+    model_name: Optional[str] = None
+    device: Optional[str] = None
+    face_rec_interval: Optional[int] = None
+    face_rec_retry: Optional[int] = None
+    max_faces_per_frame: Optional[int] = None
+
 @app.get("/api/ai/config")
 def get_config():
     if detector is None:
         raise HTTPException(status_code=503, detail="Detector not initialized")
+    default_tracker = tracker_registry.get_tracker("default") if tracker_registry else None
     return {
         "model_name": detector.model_name,
         "default_conf": detector.default_conf,
+        "device": detector.device,
         "tracker": "ByteTrack",
-        "target_class": "person (ID 0)"
+        "target_class": "person (ID 0)",
+        "available_models": ["yolov8n.pt", "yolo11n.pt", "yolov8n.mlpackage", "yolo11n.mlpackage"],
+        "available_devices": ["mps", "cpu", "coreml"],
+        "face_rec_interval_frames": default_tracker.face_rec_interval if default_tracker else 30,
+        "face_rec_retry_frames": default_tracker.face_rec_retry if default_tracker else 15,
+        "max_faces_per_frame": default_tracker.max_faces_per_frame if default_tracker else 2
     }
 
 @app.patch("/api/ai/config")
-def update_config(conf: float = Body(..., embed=True, ge=0.1, le=0.99)):
+def update_config(payload: AIConfigUpdatePayload):
+    global detector, tracker_registry
     if detector is None:
         raise HTTPException(status_code=503, detail="Detector not initialized")
-    detector.default_conf = round(conf, 2)
+
+    messages = []
+    if payload.conf is not None:
+        detector.default_conf = round(float(payload.conf), 2)
+        messages.append(f"Confidence threshold updated to {detector.default_conf}")
+
+    new_model = payload.model_name or detector.model_name
+    new_device = payload.device or detector.device
+
+    if (payload.model_name and payload.model_name != detector.model_name) or (payload.device and payload.device != detector.device):
+        detector = HumanDetector(model_name=new_model, default_conf=detector.default_conf, device=new_device)
+        tracker_registry = TrackerRegistry(model_name=new_model, device=new_device)
+        messages.append(f"Model reloaded: {new_model} on device: {detector.device}")
+
+    if tracker_registry:
+        for t in tracker_registry.trackers.values():
+            if payload.face_rec_interval is not None:
+                t.face_rec_interval = payload.face_rec_interval
+            if payload.face_rec_retry is not None:
+                t.face_rec_retry = payload.face_rec_retry
+            if payload.max_faces_per_frame is not None:
+                t.max_faces_per_frame = payload.max_faces_per_frame
+
     return {
         "success": True,
-        "message": f"Updated confidence threshold to {detector.default_conf}",
-        "default_conf": detector.default_conf
+        "message": " | ".join(messages) if messages else "Config unchanged",
+        "config": get_config()
     }
 
 # ──────────────────────────────────────────
@@ -351,6 +447,7 @@ def sync_gallery(payload: SyncGalleryPayload):
     """
     Syncs in-memory student face gallery vectors.
     """
+    global last_gallery_sync_time
     gallery.clear()
     for s in payload.students:
         gallery.register_student(
@@ -359,11 +456,13 @@ def sync_gallery(payload: SyncGalleryPayload):
             full_name=s.full_name,
             embeddings=s.embeddings
         )
+    last_gallery_sync_time = datetime.now(timezone.utc).isoformat()
     return {
         "success": True,
         "enrolled_students": len(gallery.students),
         "total_embeddings": len(gallery._index_to_student),
-        "threshold": gallery.similarity_threshold
+        "threshold": gallery.similarity_threshold,
+        "last_synced_at": last_gallery_sync_time
     }
 
 @app.get("/api/ai/gallery-status")
@@ -375,7 +474,8 @@ def get_gallery_status():
         "enrolled_students_count": len(gallery.students),
         "total_embeddings_count": len(gallery._index_to_student),
         "similarity_threshold": gallery.similarity_threshold,
-        "ambiguity_margin": gallery.ambiguity_margin
+        "ambiguity_margin": gallery.ambiguity_margin,
+        "last_synced_at": last_gallery_sync_time
     }
 
 class RecognizeFacePayload(BaseModel):
@@ -417,6 +517,162 @@ def recognize_face(payload: RecognizeFacePayload):
         raise HTTPException(status_code=400, detail="Invalid image input")
 
     return gallery.recognize_crop(img, custom_threshold=payload.threshold)
+
+# ──────────────────────────────────────────
+# CCTV / IP Camera RTSP Endpoints
+# ──────────────────────────────────────────
+class CCTVTestPayload(BaseModel):
+    rtsp_url: str
+    timeout_sec: Optional[float] = 4.0
+
+class CCTVStartPayload(BaseModel):
+    session_id: str
+    rtsp_url: str
+    fps: Optional[int] = 15
+
+class CCTVStopPayload(BaseModel):
+    session_id: str
+
+@app.post("/api/ai/cctv/test")
+def test_cctv_stream(payload: CCTVTestPayload):
+    """
+    Test whether an RTSP / HTTP stream is accessible and decodable.
+    """
+    return CCTVWorker.test_stream_connection(payload.rtsp_url, timeout_sec=payload.timeout_sec or 4.0)
+
+@app.post("/api/ai/cctv/start")
+def start_cctv_worker(payload: CCTVStartPayload):
+    """
+    Start continuous RTSP stream ingestion worker for a camera session.
+    """
+    worker = cctv_engine.start_worker(
+        session_id=payload.session_id,
+        rtsp_url=payload.rtsp_url,
+        fps=payload.fps or 15
+    )
+    return {
+        "success": True,
+        "message": f"CCTV worker started for session {payload.session_id}",
+        "status": worker.get_status()
+    }
+
+@app.post("/api/ai/cctv/stop")
+def stop_cctv_worker(payload: CCTVStopPayload):
+    """
+    Stop continuous RTSP stream ingestion worker.
+    """
+    stopped = cctv_engine.stop_worker(payload.session_id)
+    return {
+        "success": True,
+        "stopped": stopped,
+        "message": f"CCTV worker stopped for session {payload.session_id}" if stopped else "Worker was not running"
+    }
+
+@app.get("/api/ai/cctv/status/{session_id}")
+def get_cctv_status(session_id: str):
+    """
+    Get runtime health and connection status of a CCTV worker.
+    """
+    worker = cctv_engine.get_worker(session_id)
+    if not worker:
+        return {"session_id": session_id, "running": False, "connected": False, "message": "No active worker for session"}
+    return worker.get_status()
+
+@app.get("/api/ai/cctv/{session_id}/preview")
+def get_cctv_preview(session_id: str):
+    """
+    Return the latest decoded JPEG frame from the CCTV camera as image/jpeg.
+    """
+    worker = cctv_engine.get_worker(session_id)
+    if not worker:
+        raise HTTPException(status_code=404, detail="CCTV worker not running for this session")
+
+    _, jpeg_bytes, _ = worker.get_latest_frame()
+    if not jpeg_bytes:
+        raise HTTPException(status_code=503, detail="No video frame decoded yet from CCTV stream")
+
+    return Response(content=jpeg_bytes, media_type="image/jpeg")
+
+@app.get("/api/ai/cctv/{session_id}/stream")
+def stream_cctv_mjpeg(session_id: str):
+    """
+    Direct low-latency multipart MJPEG streaming endpoint for HTML5 <img> tags.
+    """
+    worker = cctv_engine.get_worker(session_id)
+    if not worker:
+        raise HTTPException(status_code=404, detail="CCTV worker not running for this session")
+
+    def mjpeg_generator():
+        while worker.running:
+            _, jpeg_bytes, _ = worker.get_latest_frame()
+            if jpeg_bytes:
+                yield (
+                    b"--frame\r\n"
+                    b"Content-Type: image/jpeg\r\n\r\n" + jpeg_bytes + b"\r\n"
+                )
+            time.sleep(1.0 / float(worker.target_fps))
+
+    return StreamingResponse(
+        mjpeg_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame"
+    )
+
+@app.get("/api/ai/cctv/{session_id}/detect")
+def detect_cctv_frame(
+    session_id: str,
+    conf_threshold: Optional[float] = 0.40,
+    tripwire_y: Optional[float] = 0.50,
+    enable_tracking: Optional[bool] = True
+):
+    """
+    Execute YOLO + ByteTrack + ArcFace recognition pipeline directly on the latest CCTV frame.
+    Avoids base64 serialization roundtrips for CCTV cameras!
+    """
+    if detector is None or tracker_registry is None:
+        raise HTTPException(status_code=503, detail="AI Service not initialized")
+
+    worker = cctv_engine.get_worker(session_id)
+    if not worker:
+        raise HTTPException(status_code=404, detail="CCTV worker not running for this session")
+
+    frame, _, frame_time = worker.get_latest_frame()
+    if frame is None:
+        raise HTTPException(status_code=503, detail="No video frame available from CCTV stream")
+
+    t0 = time.perf_counter()
+    if enable_tracking:
+        tracker = tracker_registry.get_tracker(session_id, default_conf=conf_threshold or 0.40)
+        result = tracker.track_frame(
+            frame,
+            conf_threshold=conf_threshold,
+            tripwire_y=tripwire_y
+        )
+    else:
+        dets, _, inf_time = detector.detect_frame(frame, conf_threshold=conf_threshold or 0.40, draw_boxes=False)
+        result = {
+            "people_count": len(dets),
+            "detections": dets,
+            "session_id": session_id,
+            "tracking_enabled": False,
+            "telemetry": {
+                "detection_time_ms": inf_time,
+                "recognition_time_ms": 0.0,
+                "tracking_time_ms": 0.0,
+                "total_processing_time_ms": inf_time,
+                "device": detector.device,
+                "model_name": detector.model_name
+            }
+        }
+
+    total_inf_time = round((time.perf_counter() - t0) * 1000, 2)
+    result["success"] = True
+    result["inference_time_ms"] = total_inf_time
+    result["image_size"] = {"width": frame.shape[1], "height": frame.shape[0]}
+    result["frame_age_ms"] = round((time.time() - frame_time) * 1000, 1)
+    if "telemetry" in result:
+        result["telemetry"]["frame_age_ms"] = result["frame_age_ms"]
+        result["telemetry"]["total_server_time_ms"] = total_inf_time
+    return result
 
 if __name__ == "__main__":
     import uvicorn

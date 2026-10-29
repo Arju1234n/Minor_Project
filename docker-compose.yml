@@ -12,6 +12,19 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: smart-classroom-ai-service
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - AI_SERVICE_PORT=8000
+      - YOLO_MODEL=yolov8n.pt
+      - DETECTION_CONFIDENCE=0.45
+
   backend:
     build:
       context: ./backend
@@ -23,11 +36,15 @@ services:
     environment:
       - PORT=5000
       - MONGO_URI=mongodb://mongodb:27017/smart-classroom-ai
+      - AI_SERVICE_URL=http://ai-service:8000
       - JWT_SECRET=change-me-to-a-random-secret-string
       - JWT_EXPIRES_IN=7d
       - NODE_ENV=development
+    volumes:
+      - backend_uploads:/app/uploads
     depends_on:
       - mongodb
+      - ai-service
 
   frontend:
     build:
@@ -43,18 +60,6 @@ services:
     depends_on:
       - backend
 
-  ai-service:
-    build:
-      context: ./ai-service
-      dockerfile: Dockerfile
-    container_name: smart-classroom-ai-service
-    restart: always
-    ports:
-      - "8000:8000"
-    environment:
-      - AI_SERVICE_PORT=8000
-      - YOLO_MODEL=yolov8n.pt
-      - DETECTION_CONFIDENCE=0.45
-
 volumes:
   mongo_data:
+  backend_uploads:

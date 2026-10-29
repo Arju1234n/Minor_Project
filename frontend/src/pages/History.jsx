@@ -6,8 +6,6 @@ import {
   HiOutlineFilter,
   HiOutlineDownload,
   HiOutlineTrash,
-  HiOutlineUserGroup,
-  HiOutlineTrendingUp,
   HiOutlineChevronDown,
   HiOutlineChevronUp,
 } from 'react-icons/hi';

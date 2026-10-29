@@ -30,7 +30,7 @@ const io = new SocketIOServer(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production'
       ? false
-      : ['http://localhost:5173', 'http://localhost:3000'],
+      : true, // Allow all local network origins in development (including mobile phones on LAN)
     methods: ['GET', 'POST'],
   },
 });
@@ -64,7 +64,7 @@ const apiLimiter = rateLimit({
 // Stricter limiter for authentication endpoints (prevent brute-force password cracking)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20,                  // limit each IP to 20 login/register attempts per window
+  max: process.env.NODE_ENV === 'production' ? 20 : 500, // relaxed during local development/testing
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many authentication attempts, please try again in 15 minutes.' },
@@ -109,10 +109,23 @@ const startServer = async () => {
   await connectDB();
   server.listen(PORT, async () => {
     console.log(`🚀 Backend running on http://localhost:${PORT}`);
-    // Prime the AI service face gallery on startup
-    syncGalleryToAIService().catch((err) => {
-      console.warn('Startup gallery sync notice:', err.message);
-    });
+    // Prime the AI service face gallery on startup with graceful retry
+    const primeGallery = async (retries = 3, delay = 2500) => {
+      for (let i = 0; i < retries; i++) {
+        try {
+          const count = await syncGalleryToAIService();
+          console.log(`✅ Startup gallery sync successful: ${count} student(s) primed`);
+          return;
+        } catch (err) {
+          if (i === retries - 1) {
+            console.warn('Startup gallery sync notice:', err.message);
+          } else {
+            await new Promise((res) => setTimeout(res, delay));
+          }
+        }
+      }
+    };
+    primeGallery();
   });
 };
 

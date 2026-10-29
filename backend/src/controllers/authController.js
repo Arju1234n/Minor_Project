@@ -6,7 +6,8 @@ const User = require('../models/User');
  * Generate a signed JWT for a user.
  */
 const signToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
+  const secret = process.env.JWT_SECRET || 'dev_jwt_secret_smart_classroom_2026';
+  return jwt.sign({ id }, secret, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 };

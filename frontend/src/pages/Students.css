@@ -301,3 +301,155 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Live Camera Capture in Student Modal ─────────────── */
+.live-camera-capture-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  gap: var(--space-md);
+  position: relative;
+}
+
+.live-camera-video-wrap {
+  position: relative;
+  width: 100%;
+  max-width: 360px;
+  aspect-ratio: 4/3;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.live-camera-preview-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1); /* Mirror selfie preview */
+}
+
+.face-framing-guide {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 60%;
+  height: 72%;
+  border: 2px dashed rgba(56, 189, 248, 0.75);
+  border-radius: 50%;
+  pointer-events: none;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 8px;
+}
+
+.face-framing-guide span {
+  font-size: 10px;
+  font-weight: 600;
+  color: #38bdf8;
+  background: rgba(15, 23, 42, 0.85);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.live-camera-actions {
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Semester Badge & Department Styling ──────────────── */
+.semester-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--primary-light, #a5b4fc);
+  background: rgba(99, 102, 241, 0.12);
+  padding: 2px 7px;
+  border-radius: var(--radius-sm, 4px);
+  width: fit-content;
+}
+
+/* ── AI Gallery Status Metric Chips ───────────────────── */
+.gallery-metrics-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.gallery-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.gallery-chip strong {
+  color: #38bdf8;
+}
+
+/* ── Test Records Review Modal & Table ────────────────── */
+.test-records-table-wrap {
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin: var(--space-md) 0;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.test-records-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.test-records-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-card);
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  z-index: 2;
+}
+
+.test-records-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.test-records-table tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.test-warning-box {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+  font-size: 12px;
+  line-height: 1.4;
+}

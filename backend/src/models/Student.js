@@ -36,8 +36,8 @@ const studentSchema = new mongoose.Schema(
     },
     className: {
       type: String,
-      required: [true, 'Class / Section is required'],
       trim: true,
+      default: '',
     },
     status: {
       type: String,
@@ -80,8 +80,8 @@ const studentSchema = new mongoose.Schema(
   }
 );
 
-// Compound index for efficient class & department filtering
-studentSchema.index({ department: 1, className: 1 });
+// Compound index for efficient department & semester filtering
+studentSchema.index({ department: 1, semester: 1 });
 studentSchema.index({ fullName: 'text', rollNumber: 'text' });
 
 module.exports = mongoose.model('Student', studentSchema);

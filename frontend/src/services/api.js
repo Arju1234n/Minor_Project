@@ -1,4 +1,15 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const isClient = typeof window !== 'undefined' && window.location;
+const BACKEND_HOST = isClient ? window.location.hostname : 'localhost';
+const isLocalhost = BACKEND_HOST === 'localhost' || BACKEND_HOST === '127.0.0.1';
+
+// In browser context, route through the Vite development proxy (/api -> localhost:5000)
+// to prevent phone browsers from querying their own localhost:5000 and avoid Mixed Content blocks.
+const envApiUrl = import.meta.env.VITE_API_URL;
+const isEnvApiLocalhost = envApiUrl && (envApiUrl.includes('localhost') || envApiUrl.includes('127.0.0.1'));
+
+const API_URL = isClient
+  ? (!isLocalhost && isEnvApiLocalhost ? '/api' : (envApiUrl || '/api'))
+  : 'http://localhost:5000/api';
 
 /**
  * Make an authenticated API request.
@@ -25,10 +36,18 @@ async function request(endpoint, options = {}) {
   const data = await res.json();
 
   if (!res.ok) {
-    const errorMsg =
+    // Prefer the human-readable message; if a per-item errors[] array exists
+    // (e.g. face enrollment validation failures), append each reason so the
+    // user knows exactly which photo failed and why.
+    let errorMsg =
       data.message ||
       (Array.isArray(data.errors) && data.errors[0]?.msg) ||
       'Request failed';
+
+    if (Array.isArray(data.errors) && data.errors.length > 0 &&
+        typeof data.errors[0] === 'string') {
+      errorMsg += '\n' + data.errors.join('\n');
+    }
     throw new Error(errorMsg);
   }
 
@@ -56,10 +75,10 @@ export const authAPI = {
 export const cameraAPI = {
   list: () => request('/cameras'),
 
-  create: (name) =>
+  create: (data) =>
     request('/cameras', {
       method: 'POST',
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(typeof data === 'string' ? { name: data } : data),
     }),
 
   get: (sessionId) => request(`/cameras/${sessionId}`),
@@ -73,8 +92,24 @@ export const cameraAPI = {
   delete: (sessionId) =>
     request(`/cameras/${sessionId}`, { method: 'DELETE' }),
 
+  testStream: (rtspUrl, username, password) =>
+    request('/cameras/test-stream', {
+      method: 'POST',
+      body: JSON.stringify({ rtspUrl, username, password }),
+    }),
+
+  startCctv: (sessionId) =>
+    request(`/cameras/${sessionId}/start-cctv`, { method: 'POST' }),
+
+  stopCctv: (sessionId) =>
+    request(`/cameras/${sessionId}/stop-cctv`, { method: 'POST' }),
+
+  getCctvStatus: (sessionId) =>
+    request(`/cameras/${sessionId}/cctv-status`),
+
   getPublicConfig: (sessionId) => request(`/cameras/public/${sessionId}`),
   getIceServers: () => request('/cameras/public/ice-servers'),
+  getNetworkInfo: () => request('/cameras/network-info'),
 };
 
 // ── Dashboard ──────────────────────────────────────────
@@ -95,10 +130,24 @@ export const dashboardAPI = {
       method: 'DELETE',
     });
   },
+  // Gallery status — real counts from MongoDB + AI microservice
+  getGalleryStatus: () => request('/dashboard/gallery-status'),
+  // Manual gallery sync trigger
+  syncGallery: () =>
+    request('/dashboard/sync-gallery', { method: 'POST' }),
 };
 
+
 // ── AI Computer Vision Microservice ────────────────────
-const AI_URL = import.meta.env.VITE_AI_URL || 'http://localhost:8000';
+// In the browser, route through Vite proxy (/api/ai -> localhost:8000)
+// by setting AI_URL to '' (relative path). This prevents phones from querying localhost:8000
+// on their own device and avoids HTTPS mixed content blocks.
+const envAiUrl = import.meta.env.VITE_AI_URL;
+const isEnvAiLocalhost = envAiUrl && (envAiUrl.includes('localhost') || envAiUrl.includes('127.0.0.1'));
+
+const AI_URL = isClient
+  ? (!isLocalhost || isEnvAiLocalhost || !envAiUrl ? '' : envAiUrl)
+  : 'http://localhost:8000';
 
 export const aiAPI = {
   detectFrame: async (base64Image, confThreshold = 0.40, sessionId = 'default', tripwireY = 0.50, enableTracking = true) => {
@@ -121,6 +170,20 @@ export const aiAPI = {
     return res.json();
   },
 
+  detectCctvFrame: async (sessionId, confThreshold = 0.40, tripwireY = 0.50, enableTracking = true) => {
+    const params = new URLSearchParams({
+      conf_threshold: confThreshold,
+      tripwire_y: tripwireY,
+      enable_tracking: enableTracking,
+    });
+    const res = await fetch(`${AI_URL}/api/ai/cctv/${sessionId}/detect?${params.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'CCTV AI detection failed');
+    }
+    return res.json();
+  },
+
   resetSession: async (sessionId) => {
     const res = await fetch(`${AI_URL}/api/ai/reset-session/${sessionId}`, {
       method: 'POST',
@@ -138,11 +201,12 @@ export const aiAPI = {
     return res.json();
   },
 
-  updateConfig: async (conf) => {
+  updateConfig: async (confOrPayload) => {
+    const payload = typeof confOrPayload === 'object' ? confOrPayload : { conf: confOrPayload };
     const res = await fetch(`${AI_URL}/api/ai/config`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conf }),
+      body: JSON.stringify(payload),
     });
     return res.json();
   },
@@ -197,7 +261,14 @@ export const studentAPI = {
     request(`/students/${id}/enrollment`, {
       method: 'DELETE',
     }),
-  getActiveGallery: () => request('/students/active-gallery'),
+  syncGallery: () => request('/students/sync-gallery', { method: 'POST' }),
+  getGalleryStatus: () => request('/dashboard/gallery-status'),
+  getCandidateTestRecords: () => request('/students/candidate-test-records'),
+  cleanupTestRecords: (studentIds) =>
+    request('/students/cleanup-test-records', {
+      method: 'POST',
+      body: JSON.stringify({ studentIds }),
+    }),
   getRecognitionEvents: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return request(`/students/recognition-events${query ? `?${query}` : ''}`);

@@ -1,8 +1,13 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { authAPI } from '../services/api';
+import { AuthContext } from './authContext';
 
-const AuthContext = createContext(null);
-
+/**
+ * AuthProvider — the only export from this .jsx file.
+ * Vite Fast Refresh requires .jsx files to export ONLY React components.
+ * The raw AuthContext object lives in authContext.js (plain .js) to avoid
+ * the "incompatible export" HMR invalidation warning.
+ */
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -41,10 +46,4 @@ export function AuthProvider({ children }) {
       {children}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth() {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within an AuthProvider');
-  return ctx;
 }

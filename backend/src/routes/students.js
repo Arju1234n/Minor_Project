@@ -24,10 +24,13 @@ const storage = multer.diskStorage({
   },
 });
 
-// File filter: accept only image formats
+// File filter: accept only image formats with matching extensions
 const fileFilter = (_req, file, cb) => {
-  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-  if (allowedTypes.includes(file.mimetype)) {
+  const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  const allowedExts = ['.jpg', '.jpeg', '.png', '.webp'];
+  const ext = path.extname(file.originalname || '').toLowerCase();
+
+  if (allowedMimes.includes(file.mimetype) && allowedExts.includes(ext)) {
     cb(null, true);
   } else {
     cb(new Error('Invalid image format. Only JPEG, PNG, and WebP are supported.'), false);
@@ -43,15 +46,21 @@ const upload = multer({
   },
 });
 
-// All routes require authentication
+// Active Face Gallery export for AI microservice (must be before protect and before /:id)
+router.get('/active-gallery', studentController.getActiveGallery);
+
+// All subsequent routes require authentication
 router.use(protect);
+
+router.post('/sync-gallery', studentController.triggerGallerySync);
 
 router.route('/')
   .get(studentController.getStudents)
   .post(upload.array('facePhotos', 5), studentController.createStudent);
 
-// Active Face Gallery export (must be before /:id)
-router.get('/active-gallery', studentController.getActiveGallery);
+// Candidate test records review & explicit cleanup (must be before /:id)
+router.get('/candidate-test-records', studentController.getCandidateTestRecords);
+router.post('/cleanup-test-records', studentController.cleanupTestRecords);
 
 // Face Recognition Audit Events (must be before /:id)
 router.get('/recognition-events', studentController.getRecognitionEvents);

@@ -1,3 +1,5 @@
+import os
+import json
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 from face_engine import face_engine
@@ -7,6 +9,7 @@ class StudentGallery:
     In-memory vector gallery of enrolled students for sub-millisecond face matching.
     Uses Cosine Similarity on normalized 128-d ArcFace embeddings.
     Enforces strict thresholding and ambiguity margins to prevent false identity claims.
+    Automatically self-heals by loading persistent vector cache on restart.
     """
 
     def __init__(
@@ -21,6 +24,9 @@ class StudentGallery:
         # Precomputed matrix for vectorized batch dot products
         self._embedding_matrix: Optional[np.ndarray] = None
         self._index_to_student: List[Tuple[str, str, str]] = [] # [(student_id, roll_number, full_name)]
+
+        # Automatically recover gallery on startup if persistent cache exists
+        self._load_cache()
 
     def register_student(
         self,
@@ -65,6 +71,68 @@ class StudentGallery:
         self.students.clear()
         self._embedding_matrix = None
         self._index_to_student.clear()
+
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Returns status metrics of in-memory face vector gallery
+        """
+        return {
+            "enrolled_students_count": len(self.students),
+            "total_embeddings_count": len(self._index_to_student),
+            "similarity_threshold": self.similarity_threshold,
+            "ambiguity_margin": self.ambiguity_margin
+        }
+
+    def _get_cache_path(self) -> str:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(base_dir, "models", "gallery_cache.json")
+
+    def _save_cache(self, students_list: List[Dict[str, Any]]):
+        try:
+            cache_path = self._get_cache_path()
+            os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(students_list, f)
+        except Exception as err:
+            print(f"Notice: Failed to write gallery cache: {err}")
+
+    def _load_cache(self):
+        try:
+            cache_path = self._get_cache_path()
+            if os.path.exists(cache_path):
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list) and len(data) > 0:
+                        self.sync_students(data, save_cache=False)
+                        print(f"✅ Self-healed AI gallery from disk cache: {len(self.students)} student(s) loaded")
+        except Exception as err:
+            print(f"Notice: Failed to read gallery cache: {err}")
+
+    def sync_students(self, students_list: List[Dict[str, Any]], save_cache: bool = True) -> int:
+        """
+        Atomically replaces gallery with provided students and their embeddings.
+        Supports both snake_case (student_id) and camelCase (studentId) schemas.
+        """
+        self.clear()
+        count = 0
+        for s in students_list:
+            sid = s.get("student_id") or s.get("studentId") or s.get("_id")
+            roll = s.get("roll_number") or s.get("rollNumber") or ""
+            name = s.get("full_name") or s.get("fullName") or ""
+            embs = s.get("embeddings") or []
+            if sid and embs:
+                self.register_student(
+                    student_id=str(sid),
+                    roll_number=roll,
+                    full_name=name,
+                    embeddings=embs
+                )
+                count += 1
+
+        if save_cache:
+            self._save_cache(students_list)
+
+        return count
 
     def _rebuild_matrix(self):
         """

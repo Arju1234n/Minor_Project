@@ -1,22 +1,42 @@
+import os
 import time
 from typing import List, Dict, Any, Tuple
 import cv2
 import numpy as np
+import torch
 from ultralytics import YOLO
+
+def get_optimal_device(requested_device: str = None) -> str:
+    """
+    Auto-detect optimal inference device on Apple Silicon / CUDA / CPU.
+    Prefers Metal Performance Shaders (MPS) on Apple Silicon M-series.
+    """
+    if requested_device:
+        return requested_device
+    env_dev = os.getenv("YOLO_DEVICE")
+    if env_dev:
+        return env_dev
+    if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        return "mps"
+    if torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
 class HumanDetector:
     """
-    YOLOv8 Human Detector (Person Class Only)
+    YOLO Human Detector (Person Class Only)
     Specialized for smart classroom human detection and spatial tracking.
+    Supports YOLOv8n, YOLO11n, and Apple Silicon MPS/CoreML hardware acceleration.
     """
-    def __init__(self, model_name: str = "yolov8n.pt", default_conf: float = 0.45):
-        self.model_name = model_name
+    def __init__(self, model_name: str = "yolov8n.pt", default_conf: float = 0.45, device: str = None):
+        self.model_name = os.getenv("YOLO_MODEL", model_name)
         self.default_conf = default_conf
-        print(f"Loading YOLO model: {self.model_name}...")
+        self.device = get_optimal_device(device)
+        print(f"Loading YOLO model: {self.model_name} on device: {self.device}...")
         self.model = YOLO(self.model_name)
         # Class 0 in COCO is 'person'
         self.person_class_id = 0
-        print(f"YOLO model {self.model_name} initialized. Target class: person (ID {self.person_class_id})")
+        print(f"YOLO model {self.model_name} initialized on {self.device}. Target class: person (ID {self.person_class_id})")
 
     def detect_frame(
         self,
@@ -32,18 +52,21 @@ class HumanDetector:
             inference_time_ms: Processing time in milliseconds
         """
         conf = conf_threshold if conf_threshold is not None else self.default_conf
-        t0 = time.time()
+        t0 = time.perf_counter()
 
         # Run inference filtering only for 'person' (class 0)
-        results = self.model.predict(
-            source=frame,
-            classes=[self.person_class_id],
-            conf=conf,
-            verbose=False,
-            device='cpu' # Runs on Apple CPU/MPS
-        )
+        predict_kwargs = {
+            "source": frame,
+            "classes": [self.person_class_id],
+            "conf": conf,
+            "verbose": False
+        }
+        if self.device != "coreml" and not self.model_name.endswith(".mlpackage"):
+            predict_kwargs["device"] = self.device
 
-        inference_time_ms = round((time.time() - t0) * 1000, 2)
+        results = self.model.predict(**predict_kwargs)
+
+        inference_time_ms = round((time.perf_counter() - t0) * 1000, 2)
         detections = []
         result = results[0]
         h, w = frame.shape[:2]

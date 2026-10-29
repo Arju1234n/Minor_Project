@@ -112,6 +112,43 @@ class FaceEngine:
                 "confidence": conf
             }
 
+        # Quality validation: check for extreme blur and poor illumination
+        img_h, img_w = image.shape[:2]
+        crop_x1 = max(0, x)
+        crop_y1 = max(0, y)
+        crop_x2 = min(img_w, x + w)
+        crop_y2 = min(img_h, y + h)
+
+        face_crop = image[crop_y1:crop_y2, crop_x1:crop_x2]
+        if face_crop.size > 0:
+            face_gray = cv2.cvtColor(face_crop, cv2.COLOR_BGR2GRAY) if len(face_crop.shape) == 3 else face_crop
+            blur_score = float(cv2.Laplacian(face_gray, cv2.CV_64F).var())
+            brightness = float(np.mean(face_gray))
+
+            if blur_score < 25.0:
+                return {
+                    "valid": False,
+                    "error": "Photograph is too blurry. Please upload a clear, focused front-facing portrait.",
+                    "face_count": 1,
+                    "confidence": conf
+                }
+
+            if brightness < 20.0:
+                return {
+                    "valid": False,
+                    "error": "Photograph is too dark. Please provide a well-lit portrait.",
+                    "face_count": 1,
+                    "confidence": conf
+                }
+
+            if brightness > 245.0:
+                return {
+                    "valid": False,
+                    "error": "Photograph is overexposed or washed out. Please provide a portrait with natural lighting.",
+                    "face_count": 1,
+                    "confidence": conf
+                }
+
         embedding = self.extract_embedding(image, face)
 
         return {

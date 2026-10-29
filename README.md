@@ -1,158 +1,184 @@
-# 🎓 AI-Based Real-Time Human Detection & Tracking System
+# Smart Classroom AI — Computer Vision & Person Identification System
 
-> **Smart Classroom AI** — Remote smartphone camera streaming, real-time human detection (Ultralytics YOLOv8), multi-person tracking (ByteTrack), virtual tripwire line crossing, zone occupancy counting, and an administrative monitoring dashboard.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/Node.js-v20%2B-green.svg)](https://nodejs.org/)
+[![React](https://img.shields.io/badge/React-v19-blue.svg)](https://react.dev/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-teal.svg)](https://fastapi.tiangolo.com/)
+[![YOLOv8](https://img.shields.io/badge/YOLO-v8n-red.svg)](https://github.com/ultralytics/ultralytics)
 
----
-
-## 🏆 All 8 Project Phases Completed & Operational
-
-- [x] **Phase 1: Project Setup & Monorepo Architecture**
-  - Node.js/Express REST backend with JWT authentication, role guards (`admin`, `operator`), and MongoDB Mongoose models (`User`, `CameraSession`, `DetectionEvent`, `SystemSetting`).
-  - React 18 + Vite dashboard frontend with dark-themed glassmorphism, responsive drawer navigation, and seeded admin credentials.
-- [x] **Phase 2: Smartphone Camera Interface & Media Capture**
-  - Mobile operator view (`/camera/:sessionId`) utilizing `navigator.mediaDevices.getUserMedia`.
-  - Camera device enumeration, seamless front/user and rear/environment camera toggling via RTCPeerConnection track replacement, torch/flashlight toggle, and framing grid overlay.
-- [x] **Phase 3: WebRTC P2P Live Video Transmission**
-  - Low-latency WebRTC peer-to-peer live media streaming directly from smartphone to admin dashboard.
-  - Socket.IO signaling server managing SDP offers, answers, and ICE candidate exchanges.
-  - Multi-viewer architecture supporting simultaneous administrative observation.
-- [x] **Phase 4: AI Microservice & YOLOv8 Human Detection**
-  - Dedicated Python 3.10 FastAPI computer vision microservice (`http://localhost:8000`).
-  - Ultralytics YOLOv8n detector strictly restricted to the `person` class (COCO class ID 0).
-  - High-precision confidence filtering and normalized/pixel coordinate extraction.
-- [x] **Phase 5: Real-Time Frame Extraction & Canvas Bounding Boxes**
-  - Client-side offscreen canvas frame sampler operating at ~3.5–5 FPS with dynamic aspect ratio preservation.
-  - Neon visual bounding boxes, confidence percentage badges, and real-time people count HUD overlaid onto the live WebRTC feed.
-  - Detection event persistence to MongoDB for historical tracking.
-- [x] **Phase 6: Multi-Person Tracking & Spatial Analytics**
-  - Persistent ID tracking powered by ByteTrack (Kalman Filter state estimation + two-stage Hungarian algorithm association).
-  - Trajectory movement breadcrumbs with unique golden-angle HSL color coding per person.
-  - Bidirectional virtual tripwire line crossing detection (`▲ IN` / `▼ OUT` entrance/exit counters).
-  - Configurable virtual monitored zone occupancy detection.
-- [x] **Phase 7: Live Statistics, Lifecycle Management & Historical Audit Logs**
-  - Socket.IO bi-directional metric broadcasting for live dashboard stats (occupancy cards, hourly bar charts).
-  - Event log query engine with multi-criteria filtering (Session, Min Occupancy, Date Range).
-  - Expandable row drawer for bounding box coordinate inspection.
-  - One-click CSV and JSON report exports and batch pruning controls.
-- [x] **Phase 8: Production Hardening, Privacy Governance & Deployment**
-  - Security hardening with `helmet`, `cors`, and `express-rate-limit` (brute-force defense on auth and API flooding protection).
-  - Dynamic system settings synchronization (`GET /api/settings`, `PUT /api/settings`).
-  - Complete Docker Compose multi-container deployment orchestration (`mongodb`, `backend`, `frontend`, `ai-service`).
-- [x] **⭐ Biometric Face Recognition Upgrade (Complete & Tested)**
-  - **Student Directory**: Student registration with full name, roll number, registration number, department, semester, class, and consented photo uploads (`/students`).
-  - **Face Enrollment Engine**: OpenCV Zoo YuNet face detector + SFace ArcFace 128-d normalized embedding extraction with single-person validation.
-  - **Sub-Millisecond Vector Gallery**: Vectorized cosine similarity matching with 0.363 FAR threshold, ambiguity margin safeguards, and backend gallery auto-sync.
-  - **Tracking Pipeline Integration**: Upper-torso head cropping on YOLOv8/ByteTrack bounding boxes with per-track identity caching for real-time 4–5 FPS performance.
-  - **Live Monitoring HUD & Roster**: Student name and roll number overlays above bounding boxes, glowing face bracket markers, live Identified Students sidebar roster, and real-time recognition audit events.
-  - **Biometric Governance**: Admin biometrics wipe, 30-day auto-pruning TTL index on `RecognitionEvent`, and zero raw video storage.
+> **Smart Classroom AI** is an enterprise-grade, real-time spatial vision and person identification system designed for automated classroom monitoring. It pairs smartphone cameras via low-latency WebRTC streaming, tracks multiple people using YOLOv8 + ByteTrack, and matches attendee identities against an enrolled student gallery using OpenCV YuNet and SFace (ArcFace 128-d embeddings).
 
 ---
 
-## 🏗️ System Architecture
+## 📌 Table of Contents
+
+1. [Overview & Scope](#-overview--scope)
+2. [Key Features](#-key-features)
+3. [Architecture](#-architecture)
+4. [Technology Stack](#-technology-stack)
+5. [Repository Structure](#-repository-structure)
+6. [Prerequisites](#-prerequisites)
+7. [Environment Variables](#-environment-variables)
+8. [Local Development Setup](#-local-development-setup)
+9. [Docker Deployment](#-docker-deployment)
+10. [End-to-End User Workflows](#-end-to-end-user-workflows)
+    - [1. Registering Students](#1-registering-students)
+    - [2. Enrolling Face Photos](#2-enrolling-face-photos)
+    - [3. Connecting a Phone Camera](#3-connecting-a-phone-camera)
+    - [4. Live Monitoring Modes](#4-live-monitoring-modes)
+11. [Testing & Quality Verification](#-testing--quality-verification)
+12. [Troubleshooting Common Issues](#-troubleshooting-common-issues)
+13. [Security & Biometric Privacy](#-security--biometric-privacy)
+14. [Documentation Index](#-documentation-index)
+
+---
+
+## 🚀 Overview & Scope
+
+Traditional classroom attendance and surveillance rely on manual roll calls or static CCTV recorders. Smart Classroom AI transforms any standard smartphone into an intelligent edge sensor:
+* **No expensive hardware required**: Connects standard mobile devices over Wi-Fi via WebRTC.
+* **Dual Monitoring Modes**: Seamlessly switch between **Simple Monitoring** (spatial headcount, tracking, and tripwire crossing) and **Face Identification** (biometric ArcFace matching).
+* **Strict Privacy Governance**: Raw video frames are processed on-the-fly in volatile memory and never persisted to disk. Only 128-dimensional non-invertible feature vectors are stored.
+
+---
+
+## ✨ Key Features
+
+* **Mobile P2P Video Transmission**: Low-latency WebRTC streaming from iOS/Android browsers with front/rear camera switching and torch control.
+* **YOLOv8 Multi-Person Detection**: Nano detector model (`yolov8n.pt`) exclusively filtered for the `person` class (COCO 0).
+* **ByteTrack Multi-Object Tracking**: Kalman Filter trajectory estimation providing persistent tracking IDs across occlusions.
+* **Biometric Face Recognition (ArcFace)**:
+  * **Face Detection**: OpenCV Zoo YuNet with 5-point landmark alignment.
+  * **Feature Extraction**: OpenCV SFace generating 128-dimensional L2-normalized embeddings.
+  * **Enrollment Validation**: Rejects blurry, occluded, zero-face, or multi-face portraits automatically.
+  * **In-Memory Vector Gallery**: Vectorized cosine similarity matching with 0.363 FAR threshold and ambiguity safeguards.
+* **Canvas Overlay Geometry Engine**: Compensates for container letterboxing (`object-fit: contain`) to keep bounding boxes and identity badges perfectly locked on moving targets across window resizes.
+* **Spatial Analytics**: Bidirectional virtual tripwire crossing counters (`▲ IN` / `▼ OUT`) and monitored polygon zone occupancy.
+* **Administrator Dashboard**: Real-time Socket.IO statistics, historical event logging, and student profile management.
+
+---
+
+## 🏛️ Architecture
 
 ```
 ┌─────────────────────────────────┐
 │     Smartphone Operator         │
-│  (React PWA / Mobile Browser)   │
+│  (Mobile Browser / getUserMedia)│
 └──────────────┬──────────────────┘
                │ 1. WebRTC Signaling (Socket.IO)
                ▼
 ┌─────────────────────────────────┐           ┌─────────────────────────────┐
-│    Node.js / Express Backend    │           │       MongoDB 7.0           │
-│   (Port 5000: Auth, Sessions,   ├──────────►│  (Users, Sessions, Events,  │
-│     Signaling & Settings)       │           │     TTL Auto-Expiry)        │
+│    Node.js / Express Backend    │◄─────────►│     MongoDB (Port 27017)    │
+│  - REST API & Auth (Port 5000)  │           │  - Users, Students          │
+│  - WebRTC Room Signaling        │           │  - Face Embeddings          │
+│  - AI Service Integration Client│           │  - Detection & Audit Events │
 └──────────────┬──────────────────┘           └─────────────────────────────┘
                │
-               │ 2. Direct WebRTC P2P Media Stream (SRTP Video)
+               │ 2. P2P Direct Media Stream (WebRTC)
                ▼
-┌─────────────────────────────────┐
-│    Admin Live Monitoring        │
-│  (React 18 + Canvas HUD: 5173)  │
-└──────────────┬──────────────────┘
-               │ 3. Offscreen Frame Extraction (3.5 FPS Base64 JPEG)
-               ▼
-┌─────────────────────────────────┐
-│   Python FastAPI AI Service     │
-│   (Port 8000: YOLOv8 Person     │
-│    Detection + ByteTrack)       │
-└─────────────────────────────────┘
+┌─────────────────────────────────┐           ┌─────────────────────────────┐
+│     Admin Web Dashboard         │           │    FastAPI AI Microservice  │
+│    (React 19 + Vite SPA)        │──────────►│   (Python 3.10, Port 8000)  │
+│  - Live Video & Canvas Overlays │  Frames   │  - YOLOv8 Person Detection  │
+│  - Simple Monitoring / Biometric│  (HTTP)   │  - ByteTrack Trajectories   │
+│  - Real-time Roster & Events    │◄──────────│  - YuNet + SFace (ArcFace)  │
+└─────────────────────────────────┘  Results  └─────────────────────────────┘
 ```
 
 ---
 
-## 📁 Repository Structure
+## 🛠️ Technology Stack
+
+| Layer | Technologies |
+|---|---|
+| **Frontend** | React 19, Vite, React Router v7, React Icons, Native HTML5 Canvas |
+| **Backend** | Node.js v20, Express 4, Socket.IO, Mongoose, Multer, Helmet, Rate Limit |
+| **Database** | MongoDB 7.0 |
+| **AI / Computer Vision** | Python 3.10, FastAPI, Ultralytics YOLOv8, OpenCV (YuNet & SFace), NumPy, SciPy |
+| **Streaming** | WebRTC (P2P), Google STUN (`stun.l.google.com:19302`) |
+| **Containerization** | Docker, Docker Compose |
+
+---
+
+## 📂 Repository Structure
 
 ```
 smart-classroom-ai/
-├── .env.example              # Sample environment configuration
-├── .gitignore                # Git exclusions
-├── docker-compose.yml        # Complete Docker multi-container stack
-├── README.md                 # System documentation & quickstart
-├── backend/                  # Node.js + Express + Socket.IO Signaling
-│   ├── Dockerfile
-│   ├── package.json
-│   └── src/
-│       ├── config/           # Database (db.js) & WebRTC (webrtc.js) config
-│       ├── controllers/      # auth, camera, dashboard, settings controllers
-│       ├── middleware/       # JWT auth & role validation
-│       ├── models/           # User, CameraSession, DetectionEvent, SystemSetting
-│       ├── routes/           # auth, cameras, dashboard, settings routes
-│       ├── signaling/        # WebRTC P2P signaling server
-│       ├── seed.js           # Default admin seeder
-│       └── server.js         # HTTP server entry point with rate limiters
-├── frontend/                 # React 18 + Vite Admin Dashboard & Mobile Client
-│   ├── Dockerfile
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.js
-│   └── src/
-│       ├── components/       # Layout, Navigation Sidebar, ProtectedRoute
-│       ├── context/          # AuthContext (JWT session management)
-│       ├── pages/            # Login, Dashboard, Cameras, LiveMonitoring,
-│       │                     # History, Settings, MobileCamera
-│       ├── services/         # Axios/Fetch API client & WebRTC client
-│       └── App.jsx           # Route definitions
-└── ai-service/               # Python 3.10 + FastAPI + YOLOv8 + ByteTrack
-    ├── Dockerfile
-    ├── requirements.txt      # Clean vision dependencies
-    ├── main.py               # FastAPI application entry point
-    ├── detector.py           # YOLOv8 person detector (Class ID 0 only)
-    ├── tracker.py            # ByteTrack multi-object tracking implementation
-    ├── test_detector.py      # Unit test verifying YOLO detection accuracy
-    └── test_tracking.py      # Multi-frame tracking association test
+├── frontend/                     # React 19 + Vite Web Application
+│   ├── public/                   # Static assets & SVG icons
+│   ├── src/
+│   │   ├── components/           # Reusable UI (Sidebar, Layout, Route Guards)
+│   │   ├── context/              # Auth state & session providers
+│   │   ├── hooks/                # Custom React hooks (useAuth)
+│   │   ├── pages/                # App views (Monitoring, Students, Cameras, etc.)
+│   │   ├── services/             # HTTP API client and WebRTC signaling client
+│   │   └── App.jsx               # Root routes
+│   └── package.json
+├── backend/                      # Node.js Express REST API & WebRTC Signaling
+│   ├── src/
+│   │   ├── config/               # Database, WebRTC & environment config
+│   │   ├── controllers/          # Business logic handlers
+│   │   ├── middleware/           # JWT auth & role guards
+│   │   ├── models/               # Mongoose database models
+│   │   ├── routes/               # Express endpoint routes
+│   │   ├── services/             # aiService client proxy
+│   │   ├── signaling/            # WebRTC Socket.IO signaling handler
+│   │   ├── tests/                # Automated API & verification tests
+│   │   ├── seed.js               # Admin account seeder
+│   │   └── server.js             # Express application entry point
+│   └── package.json
+├── ai-service/                   # Python FastAPI Computer Vision Service
+│   ├── models/                   # ONNX models (YuNet detector & SFace recognizer)
+│   ├── detector.py               # Ultralytics YOLOv8 human detector
+│   ├── face_engine.py            # OpenCV YuNet + SFace embedding extractor
+│   ├── recognition_service.py    # In-memory student vector gallery
+│   ├── tracker.py                # ByteTrack multi-person tracking & spatial analytics
+│   ├── main.py                   # FastAPI service endpoints
+│   ├── requirements.txt          # Python dependencies
+│   └── yolov8n.pt                # YOLOv8 nano model weights
+├── docs/                         # Architecture, API & deployment documentation
+│   ├── architecture.md
+│   ├── development.md
+│   ├── api.md
+│   └── deployment.md
+├── docker-compose.yml            # Multi-container production deployment
+├── .env.example                  # Environment configuration template
+└── README.md
 ```
 
 ---
 
-## ⚡ Quick Start (Local Development)
+## ⚙️ Environment Variables
 
-### Prerequisites
-- **Node.js**: v18.x or v20.x
-- **Python**: v3.10.x with `pip`
-- **MongoDB**: v6.x or v7.x (running on `localhost:27017`)
+Copy the example configuration to initialize your local environment:
 
----
-
-### Step 1: Environment Configuration
-From the `smart-classroom-ai/` root:
 ```bash
 cp .env.example .env
 ```
 
+| Variable | Default Value | Description |
+|---|---|---|
+| `PORT` | `5000` | Backend API port |
+| `MONGO_URI` | `mongodb://localhost:27017/smart-classroom-ai` | MongoDB connection URI |
+| `JWT_SECRET` | `change-me-to-a-random-secret-string` | Secret key for signing JWT tokens |
+| `AI_SERVICE_URL` | `http://localhost:8000` | URL of the Python computer vision microservice |
+| `AI_SERVICE_PORT` | `8000` | AI microservice port |
+| `VITE_API_URL` | `http://localhost:5000/api` | Backend API base URL for the frontend |
+| `VITE_SOCKET_URL` | `http://localhost:5000` | Socket.IO server URL for WebRTC signaling |
+| `STUN_URL` | `stun:stun.l.google.com:19302` | STUN server for NAT traversal |
+
 ---
 
-### Step 2: Backend Setup & Seed
+## 💻 Local Development Setup
+
+### 1. Start MongoDB
+Ensure MongoDB is running locally on port `27017`:
 ```bash
-cd backend
-npm install
-npm run seed     # Seeds default admin: admin@smartclassroom.ai / admin123
-npm run dev      # Starts on http://localhost:5000
+brew services start mongodb-community@7.0
+# Or: docker run -d -p 27017:27017 --name mongo mongo:7.0
 ```
 
----
-
-### Step 3: AI Computer Vision Service
-Open a new terminal:
+### 2. Start the AI Microservice
 ```bash
 cd ai-service
 python3 -m venv .venv
@@ -160,88 +186,127 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
-Verify the AI service:
+
+### 3. Start the Backend API
+In a new terminal:
 ```bash
-curl http://localhost:8000/health
-# Returns: {"status":"ok","service":"ai-service","detector_loaded":true,"tracker_loaded":true,...}
+cd backend
+npm install
+npm run seed     # Seeds default admin: admin@smartclassroom.ai / admin123
+npm run dev
 ```
 
----
-
-### Step 4: React Dashboard Frontend
-Open a new terminal:
+### 4. Start the Frontend
+In a new terminal:
 ```bash
 cd frontend
 npm install
 npm run dev -- --host --port 5173
 ```
-Access the dashboard at `http://localhost:5173`.
+Access the application at `http://localhost:5173`.
 
 ---
 
-## 🐳 Docker Compose Deployment (One-Command Run)
+## 🐳 Docker Deployment
 
-To run the entire distributed microservice stack via Docker:
+To launch the complete multi-tier system with a single command:
 
 ```bash
-docker-compose up --build
+docker compose up -d --build
+```
+Seed the admin user inside the backend container:
+```bash
+docker compose exec backend npm run seed
 ```
 
-This launches:
-1. `mongodb` on port `27017` with persistent volume `mongo_data`
-2. `backend` on port `5000`
-3. `ai-service` on port `8000`
-4. `frontend` on port `5173`
+---
+
+## 📖 End-to-End User Workflows
+
+### 1. Registering Students
+1. Navigate to **[Students](http://localhost:5173/students)**.
+2. Click **+ Register Student**.
+3. Fill in Full Name, Roll Number, Department, Semester, and Class.
+4. (Optional) Toggle **Auto-Enroll Face Photos** and upload 1–3 clear portrait photos.
+5. Click **Create Student**.
+
+### 2. Enrolling Face Photos
+1. On the **Students** table, click **Edit** (pencil icon) on any student profile.
+2. Click **Use Camera** to capture your face using the built-in webcam tool, or click **Upload Photos**.
+3. Click **Save Changes**.
+4. The system validates the photo with YuNet, generates a 128-d ArcFace vector, and updates the AI in-memory gallery. The student status will turn to **Enrolled** (Green).
+
+### 3. Connecting a Phone Camera
+1. Navigate to **[Cameras](http://localhost:5173/cameras)**.
+2. Click **+ New Camera Unit** or scan the QR code displayed on screen with your phone.
+3. On the phone browser (`http://<YOUR_LAN_IP>:5173/camera/:sessionId`), grant camera permissions and tap **Start Camera Stream**.
+
+### 4. Live Monitoring Modes
+Navigate to **[Live Monitoring](http://localhost:5173/monitoring)**. Use the **Monitoring Mode** toggle in the sidebar:
+* **Simple Monitoring**: High-speed mode. Displays clean `Person #1 (95%)` badges, active headcount, ByteTrack motion trails, and tripwire counters. Hides recognition tags and face brackets.
+* **Face Identification**: Full biometric mode. Matches detected faces against the enrolled database. Displays `✓ Roll — Student Name (Match %)` above recognized attendees in green, flags unknown individuals, and updates the live attendee roster.
 
 ---
 
-## 📱 Smartphone Camera Streaming Guide
+## 🧪 Testing & Quality Verification
 
-### Testing on Local Network (LAN)
-1. Find your laptop's local IP address (e.g. `192.168.1.50` on macOS via `ipconfig getifaddr en0`).
-2. Ensure your smartphone and laptop are connected to the same Wi-Fi network.
-3. Modern mobile browsers require a **Secure Context** (HTTPS or `localhost`) to access `navigator.mediaDevices.getUserMedia`. For local network testing:
-   - **Option A (Chrome Flag)**: On Android Chrome, navigate to `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, add `http://192.168.1.50:5173`, and relaunch.
-   - **Option B (Tunnels / Ngrok / Cloudflare)**: Run `npx ngrok http 5173` or use Vite HTTPS (`vite --https`) for valid SSL certificates on iOS Safari / Android Chrome.
-4. On the Admin Dashboard (`http://localhost:5173`), navigate to **Cameras**, click **Create Camera** (e.g. `Classroom 101`), and click **Copy Operator Link**.
-5. Open the operator link on the smartphone. Grant camera permissions and tap **Start Broadcasting**.
-6. On your laptop, navigate to **Live Monitoring** to observe the incoming WebRTC video stream with real-time YOLOv8 bounding boxes, ByteTrack IDs, trajectory trails, and entrance/exit tripwire statistics.
-
----
-
-## 🛡️ Privacy by Design & Biometric Security Safeguards
-
-1. **Zero Video Persistence**: Raw camera video frames are transmitted strictly peer-to-peer over WebRTC (encrypted with SRTP/DTLS) and are **never** written to database or disk. Only temporary in-memory canvas frames are evaluated by the AI detector.
-2. **Consented Enrollment**: Face photographs and extracted 128-d ArcFace embeddings are captured only for enrolled students with explicit administrative consent.
-3. **Biometric Wipe on Demand**: Admins can permanently wipe student face embeddings at any time (`DELETE /api/students/:id/enrollment`), immediately removing biometric vectors from MongoDB and clearing them from the AI vector gallery.
-4. **Data Retention & TTL**: The `RecognitionEvent` audit collection features an automatic 30-day MongoDB TTL expiry index.
-5. **No False Certainty**: When student faces are occluded, poorly lit, or lack sufficient cosine similarity (< 0.363), they are strictly labeled "Unknown" or "Identity unavailable" rather than guessing.
-6. **Rate Limiting**: Express backend enforces rate limits on authentication attempts (max 20 per 15 minutes) and API endpoints to prevent brute-force attacks and abuse.
-
----
-
-## 🧪 Automated Test Suites
-
-Run the end-to-end verification suite across all 5 upgrade phases:
+Run all test suites from the backend directory:
 
 ```bash
 cd backend
-npm test
+npm run test:all
 ```
 
-Or execute individual phase test suites:
+Test coverage includes:
+* `npm run test:students` — Student CRUD, validation, duplicate prevention, and soft deactivation.
+* `npm run test:enrollment` — Face detection, single-person validation, multi-face rejection, 128-d ArcFace vector persistence.
+* `npm run test:recognition` — SFace cosine similarity scoring against gallery.
+* `npm run test:pipeline` — Multi-frame YOLOv8 + ByteTrack + face recognition integration.
+* `npm run test:events` — Recognition audit event persistence and MongoDB query filters.
+* `npm run test:live` — Complete end-to-end registration, gallery sync, and multi-person identification.
 
+Frontend code verification:
 ```bash
-npm run test:students     # Phase 1: Student CRUD, constraints & duplicate validation
-npm run test:enrollment   # Phase 2: Single-face validation, YuNet detection & 128-d SFace extraction
-npm run test:recognition  # Phase 3: Sub-millisecond vector gallery, similarity threshold & matching
-npm run test:pipeline     # Phase 4: YOLOv8 + ByteTrack + Facial recognition pipeline integration
-npm run test:events       # Phase 5: Recognition audit events, populated querying & TTL retention
+cd frontend
+npm run lint    # Oxlint check (0 errors)
+npm run build   # Production Vite compilation
 ```
 
 ---
 
-## 🔑 Default Credentials
+## ❓ Troubleshooting Common Issues
 
-- **Admin Email**: `admin@smartclassroom.ai`
-- **Password**: `admin123`
+* **Camera video stream shows a black box or does not connect**:
+  * Verify that both your phone and PC are on the **exact same Wi-Fi subnet**.
+  * Ensure the phone accessed the dashboard via your computer's local IP (e.g. `192.168.1.15`), not `localhost`.
+* **Live Monitor displays "1 UNKNOWN" instead of the student's name**:
+  * The person in view must have face photos enrolled. Check the **Students** tab: if the enrollment badge says `Pending`, edit the student, take a camera snapshot, and save to enroll.
+* **"AI Computer Vision service unavailable at http://localhost:8000"**:
+  * Ensure the FastAPI microservice is running: `cd ai-service && source .venv/bin/activate && python -m uvicorn main:app --port 8000`. Verify with `curl http://localhost:8000/health`.
+* **Port 5000 / 8000 already in use**:
+  * Identify and terminate lingering processes: `lsof -ti:5000,8000 | xargs kill -9`.
+
+---
+
+## 🔒 Security & Biometric Privacy
+
+* **Zero Video Recording**: The system never saves continuous raw video streams to disk. Frames are analyzed in volatile memory and discarded.
+* **Non-Invertible Embeddings**: Stored face templates are 128-dimensional floating point vectors. Original human faces cannot be reconstructed from feature vectors.
+* **Data Erasure**: Administrators have the right to wipe biometrics for any student at any time via the one-click **Wipe Biometrics** control.
+* **Protected Routes**: All operational endpoints are secured behind JWT tokens and role-based access checks (`admin`, `operator`).
+
+---
+
+## 📚 Documentation Index
+
+For deeper technical details, consult the dedicated guides in the `docs/` folder:
+* [Architecture Documentation](docs/architecture.md)
+* [Local Development Guide](docs/development.md)
+* [API Reference](docs/api.md)
+* [Deployment Guide](docs/deployment.md)
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).

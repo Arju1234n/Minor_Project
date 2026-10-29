@@ -1,4 +1,8 @@
 const DetectionEvent = require('../models/DetectionEvent');
+const Student = require('../models/Student');
+const FaceEmbedding = require('../models/FaceEmbedding');
+
+const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
 const CameraSession = require('../models/CameraSession');
 
 /**
@@ -213,5 +217,91 @@ exports.deleteEvents = async (req, res) => {
   } catch (err) {
     console.error('Delete events error:', err);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+/**
+ * GET /api/dashboard/gallery-status
+ * Returns real-time face gallery counts from MongoDB + AI microservice.
+ */
+exports.getGalleryStatus = async (req, res) => {
+  try {
+    const [totalStudents, enrolledStudents, pendingStudents, totalEmbeddings, activeEmbeddings] =
+      await Promise.all([
+        Student.countDocuments(),
+        Student.countDocuments({ status: 'active', enrollmentStatus: 'enrolled' }),
+        Student.countDocuments({ enrollmentStatus: 'pending' }),
+        FaceEmbedding.countDocuments(),
+        FaceEmbedding.countDocuments({ isActive: true }),
+      ]);
+
+    // Fetch live gallery status from AI microservice
+    let aiGallery = null;
+    let aiServiceOnline = false;
+    let lastSyncError = null;
+
+    try {
+      const aiRes = await fetch(`${AI_SERVICE_URL}/api/ai/gallery-status`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (aiRes.ok) {
+        aiGallery = await aiRes.json();
+        aiServiceOnline = true;
+      } else {
+        lastSyncError = `AI service returned HTTP ${aiRes.status}`;
+      }
+    } catch (aiErr) {
+      lastSyncError = 'AI service unreachable';
+    }
+
+    res.json({
+      success: true,
+      galleryStatus: {
+        // MongoDB counts
+        totalStudents,
+        enrolledStudents,
+        pendingStudents,
+        failedStudents: await Student.countDocuments({ enrollmentStatus: 'failed' }),
+        totalEmbeddings,
+        activeEmbeddings,
+        // AI microservice live counts
+        aiServiceOnline,
+        syncedStudents: aiGallery ? aiGallery.enrolled_students_count : null,
+        syncedEmbeddings: aiGallery ? aiGallery.total_embeddings_count : null,
+        similarityThreshold: aiGallery ? aiGallery.similarity_threshold : null,
+        lastSyncedAt: aiGallery ? (aiGallery.last_synced_at || null) : null,
+        isSynchronized: Boolean(
+          aiServiceOnline &&
+          aiGallery &&
+          aiGallery.enrolled_students_count === enrolledStudents &&
+          aiGallery.last_synced_at
+        ),
+        lastSyncError,
+        checkedAt: new Date().toISOString(),
+      },
+    });
+  } catch (err) {
+    console.error('getGalleryStatus error:', err);
+    res.status(500).json({ success: false, message: 'Server error fetching gallery status' });
+  }
+};
+
+/**
+ * POST /api/dashboard/sync-gallery
+ * Triggers an immediate gallery sync from backend to AI microservice.
+ */
+exports.triggerGallerySync = async (req, res) => {
+  try {
+    const { syncGalleryToAIService } = require('./studentController');
+    const count = await syncGalleryToAIService();
+    res.json({
+      success: true,
+      message: `Gallery synced — ${count} student(s) pushed to AI service`,
+      syncedCount: count,
+      syncedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('triggerGallerySync error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Gallery sync failed' });
   }
 };

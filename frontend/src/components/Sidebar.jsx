@@ -1,5 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/useAuth';
 import {
   HiOutlineViewGrid,
   HiOutlineVideoCamera,
@@ -21,7 +21,7 @@ const navItems = [
   { to: '/settings', icon: HiOutlineCog, label: 'Settings' },
 ];
 
-export default function Sidebar({ collapsed, onToggle }) {
+export default function Sidebar({ collapsed }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 

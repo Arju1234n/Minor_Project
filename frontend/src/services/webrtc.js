@@ -1,6 +1,19 @@
 import { io } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
+const isClient = typeof window !== 'undefined' && window.location;
+const BACKEND_HOST = isClient ? window.location.hostname : 'localhost';
+const isLocalhost = BACKEND_HOST === 'localhost' || BACKEND_HOST === '127.0.0.1';
+
+// When running in the browser, always route through the Vite development proxy
+// by connecting to '/' (same origin). Vite upgrades and forwards /socket.io to localhost:5000.
+// This prevents smartphones from attempting to connect to their own localhost:5000
+// or causing Mixed Content errors when accessed via an HTTPS tunnel.
+const envSocketUrl = import.meta.env.VITE_SOCKET_URL;
+const isEnvSocketLocalhost = envSocketUrl && (envSocketUrl.includes('localhost') || envSocketUrl.includes('127.0.0.1'));
+
+const SOCKET_URL = isClient
+  ? (!isLocalhost && isEnvSocketLocalhost ? '/' : (envSocketUrl || '/'))
+  : 'http://localhost:5000';
 
 let socket = null;
 
@@ -32,7 +45,13 @@ export const DEFAULT_ICE_SERVERS = [
  */
 export async function fetchIceServers() {
   try {
-    const res = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/cameras/public/ice-servers`);
+    const envApiUrl = import.meta.env.VITE_API_URL;
+    const isEnvApiLocalhost = envApiUrl && (envApiUrl.includes('localhost') || envApiUrl.includes('127.0.0.1'));
+    const apiBase = isClient
+      ? (!isLocalhost && isEnvApiLocalhost ? '/api' : (envApiUrl || '/api'))
+      : 'http://localhost:5000/api';
+
+    const res = await fetch(`${apiBase}/cameras/public/ice-servers`);
     if (res.ok) {
       const data = await res.json();
       if (data.iceServers && data.iceServers.length > 0) {

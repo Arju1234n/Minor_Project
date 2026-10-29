@@ -3,6 +3,8 @@ const FaceEmbedding = require('../models/FaceEmbedding');
 const RecognitionEvent = require('../models/RecognitionEvent');
 const fs = require('fs');
 const path = require('path');
+const aiService = require('../services/aiService');
+const AI_SERVICE_URL = aiService.AI_SERVICE_URL;
 
 /**
  * Register a new student with optional face photographs
@@ -18,11 +20,11 @@ exports.createStudent = async (req, res) => {
       className,
     } = req.body;
 
-    // Validate required fields
-    if (!fullName || !rollNumber || !department || !semester || !className) {
+    // Validate required fields (className is optional; semester is academic grouping)
+    if (!fullName || !rollNumber || !department || !semester) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide full name, roll number, department, semester, and class.',
+        message: 'Please provide full name, roll number, department, and semester.',
       });
     }
 
@@ -76,23 +78,92 @@ exports.createStudent = async (req, res) => {
       }
     }
 
+    // Auto-enroll face photographs during registration if requested
+    const shouldAutoEnroll = (req.body.autoEnroll === 'true' || req.query.autoEnroll === 'true') && photos.length > 0;
+    let enrollmentStatus = 'pending';
+    let embeddingsToSave = [];
+
+    if (shouldAutoEnroll) {
+      const validationErrors = [];
+      for (let i = 0; i < photos.length; i++) {
+        const photo = photos[i];
+        try {
+          const aiData = await aiService.enrollFace(photo.path);
+          if (!aiData.ok || !aiData.success) {
+            validationErrors.push(
+              `Photo #${i + 1} (${photo.originalName || 'image'}): ${aiData.error || aiData.detail || 'Face extraction failed'}`
+            );
+          } else {
+            embeddingsToSave.push({
+              embedding: aiData.embedding,
+              confidence: aiData.confidence,
+              model: aiData.model,
+            });
+          }
+        } catch (callErr) {
+          // Cleanup files
+          photos.forEach((file) => {
+            try { fs.unlinkSync(file.path); } catch (_) {}
+          });
+          return res.status(503).json({
+            success: false,
+            message: `AI Computer Vision service unavailable at ${AI_SERVICE_URL}. Please ensure ai-service is running.`,
+          });
+        }
+      }
+
+      if (validationErrors.length > 0) {
+        // Cleanup files
+        photos.forEach((file) => {
+          try { fs.unlinkSync(file.path); } catch (_) {}
+        });
+        return res.status(400).json({
+          success: false,
+          message: 'Face enrollment validation failed.',
+          errors: validationErrors,
+        });
+      }
+
+      enrollmentStatus = 'enrolled';
+    }
+
     const student = await Student.create({
       fullName: fullName.trim(),
       rollNumber: cleanRoll,
       registrationNumber: cleanReg,
       department: department.trim(),
       semester: parseInt(semester, 10),
-      className: className.trim(),
+      className: className ? className.trim() : '',
       photos,
-      enrolledFaceCount: photos.length,
-      enrollmentStatus: photos.length > 0 ? 'pending' : 'pending',
+      enrolledFaceCount: embeddingsToSave.length,
+      enrollmentStatus,
       createdBy: req.user?._id,
     });
 
+    let gallerySynced = false;
+    if (shouldAutoEnroll && embeddingsToSave.length > 0) {
+      const embeddingDocs = embeddingsToSave.map((emb, idx) => ({
+        studentId: student._id,
+        embedding: emb.embedding,
+        photoIndex: idx,
+        qualityScore: emb.confidence,
+        modelName: emb.model || 'SFace-ArcFace',
+        isActive: true,
+      }));
+      await FaceEmbedding.insertMany(embeddingDocs);
+      await syncGalleryToAIService().catch(() => {});
+      gallerySynced = true;
+    }
+
     res.status(201).json({
       success: true,
-      message: 'Student registered successfully',
+      message: shouldAutoEnroll
+        ? `Student registered, ${embeddingsToSave.length} face embedding(s) generated, and synchronized with AI gallery.`
+        : 'Student registered successfully',
       student,
+      enrolled: shouldAutoEnroll,
+      gallerySynced,
+      enrolledCount: embeddingsToSave.length,
     });
   } catch (err) {
     console.error('createStudent error:', err);
@@ -122,13 +193,13 @@ exports.getStudents = async (req, res) => {
 
     const query = {};
 
-    // Free text search on full name or roll number
+    // Free text search on full name or roll number (safely escaped against ReDoS)
     if (search && search.trim()) {
-      const term = search.trim();
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       query.$or = [
-        { fullName: { $regex: term, $options: 'i' } },
-        { rollNumber: { $regex: term, $options: 'i' } },
-        { registrationNumber: { $regex: term, $options: 'i' } },
+        { fullName: { $regex: escaped, $options: 'i' } },
+        { rollNumber: { $regex: escaped, $options: 'i' } },
+        { registrationNumber: { $regex: escaped, $options: 'i' } },
       ];
     }
 
@@ -168,19 +239,42 @@ exports.getStudents = async (req, res) => {
               $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] },
             },
             enrolledStudents: {
-              $sum: { $cond: [{ $eq: ['$enrollmentStatus', 'enrolled'] }, 1, 0] },
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ['$enrollmentStatus', 'enrolled'] },
+                      { $gt: ['$enrolledFaceCount', 0] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
             },
             pendingEnrollment: {
-              $sum: { $cond: [{ $eq: ['$enrollmentStatus', 'pending'] }, 1, 0] },
+              $sum: {
+                $cond: [
+                  {
+                    $or: [
+                      { $ne: ['$enrollmentStatus', 'enrolled'] },
+                      { $lte: ['$enrolledFaceCount', 0] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
             },
           },
         },
       ]),
     ]);
 
-    // Distinct departments and classes for filter dropdowns
-    const [departments, classes] = await Promise.all([
+    // Distinct departments, semesters, and classes for filter dropdowns
+    const [departments, semesters, classes] = await Promise.all([
       Student.distinct('department'),
+      Student.distinct('semester'),
       Student.distinct('className'),
     ]);
 
@@ -200,8 +294,9 @@ exports.getStudents = async (req, res) => {
         pendingEnrollment: 0,
       },
       availableFilters: {
-        departments: departments.sort(),
-        classes: classes.sort(),
+        departments: departments.filter(Boolean).sort(),
+        semesters: semesters.filter(Boolean).sort((a, b) => a - b),
+        classes: classes.filter(Boolean).sort(),
       },
     });
   } catch (err) {
@@ -305,7 +400,6 @@ exports.updateStudent = async (req, res) => {
           uploadedAt: new Date(),
         });
       }
-      student.enrolledFaceCount = student.photos.length;
       student.enrollmentStatus = 'pending'; // Trigger re-enrollment for new faces
     }
 
@@ -351,6 +445,9 @@ exports.deleteStudent = async (req, res) => {
       await FaceEmbedding.deleteMany({ studentId: student._id });
       await Student.findByIdAndDelete(id);
 
+      // Synchronize in-memory gallery in AI service
+      syncGalleryToAIService().catch(() => {});
+
       return res.json({
         success: true,
         message: `Student "${student.fullName}" and all biometric data permanently deleted.`,
@@ -360,6 +457,9 @@ exports.deleteStudent = async (req, res) => {
     // Soft delete: toggle to inactive
     student.status = 'inactive';
     await student.save();
+
+    // Synchronize in-memory gallery in AI service
+    syncGalleryToAIService().catch(() => {});
 
     res.json({
       success: true,
@@ -385,6 +485,9 @@ exports.toggleStudentStatus = async (req, res) => {
     student.status = student.status === 'active' ? 'inactive' : 'active';
     await student.save();
 
+    // Synchronize in-memory gallery in AI service
+    syncGalleryToAIService().catch(() => {});
+
     res.json({
       success: true,
       message: `Student is now ${student.status}`,
@@ -400,8 +503,6 @@ exports.toggleStudentStatus = async (req, res) => {
  * ── Phase 2: Face Enrollment & Embedding Generation ───────────
  * Validates face photographs via AI microservice and saves ArcFace embeddings
  */
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL || 'http://localhost:8000';
-
 exports.enrollStudentFace = async (req, res) => {
   try {
     const { id } = req.params;
@@ -445,15 +546,9 @@ exports.enrollStudentFace = async (req, res) => {
       }
 
       try {
-        const aiRes = await fetch(`${AI_SERVICE_URL}/api/ai/enroll-face`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image_path: photo.path }),
-        });
+        const aiData = await aiService.enrollFace(photo.path);
 
-        const aiData = await aiRes.json();
-
-        if (!aiRes.ok || !aiData.success) {
+        if (!aiData.ok || !aiData.success) {
           validationErrors.push(
             `Photo #${i + 1} (${photo.originalName || 'image'}): ${aiData.error || aiData.detail || 'Face extraction failed'}`
           );
@@ -502,14 +597,16 @@ exports.enrollStudentFace = async (req, res) => {
     student.enrolledFaceCount = embeddingDocs.length;
     await student.save();
 
-    // Asynchronously update AI microservice vector gallery
-    syncGalleryToAIService().catch(() => {});
+    // Synchronize embeddings with AI microservice vector gallery
+    const syncedCount = await syncGalleryToAIService();
 
     res.json({
       success: true,
-      message: `Successfully enrolled ${embeddingDocs.length} face photograph(s) for "${student.fullName}".`,
+      message: `Successfully enrolled ${embeddingDocs.length} face photograph(s) for "${student.fullName}" and synchronized with AI gallery.`,
       student,
       enrolledCount: embeddingDocs.length,
+      gallerySynced: true,
+      syncedCount,
     });
   } catch (err) {
     console.error('enrollStudentFace error:', err);
@@ -637,18 +734,14 @@ exports.getActiveGallery = async (req, res) => {
 /**
  * Helper to push active student biometric gallery directly to AI microservice
  */
-const syncGalleryToAIService = async () => {
+async function syncGalleryToAIService() {
   try {
     const students = await Student.find({ status: 'active', enrollmentStatus: 'enrolled' })
       .select('_id fullName rollNumber department className')
       .lean();
 
     if (!students.length) {
-      await fetch(`${AI_SERVICE_URL}/api/ai/sync-gallery`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ students: [] }),
-      }).catch(() => {});
+      await aiService.syncGallery([]).catch(() => {});
       return 0;
     }
 
@@ -679,11 +772,7 @@ const syncGalleryToAIService = async () => {
 
     const galleryPayload = Object.values(studentMap).filter((s) => s.embeddings.length > 0);
 
-    const res = await fetch(`${AI_SERVICE_URL}/api/ai/sync-gallery`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ students: galleryPayload }),
-    });
+    const res = await aiService.syncGallery(galleryPayload);
     if (res.ok) {
       console.log(`📡 Synced ${galleryPayload.length} students with AI Service gallery`);
     }
@@ -694,6 +783,25 @@ const syncGalleryToAIService = async () => {
   }
 };
 exports.syncGalleryToAIService = syncGalleryToAIService;
+
+/**
+ * Trigger manual gallery sync to AI service
+ * POST /api/students/sync-gallery
+ */
+exports.triggerGallerySync = async (req, res) => {
+  try {
+    const count = await syncGalleryToAIService();
+    res.json({
+      success: true,
+      message: `AI Gallery synchronized — ${count} enrolled student(s) loaded into AI service.`,
+      syncedCount: count,
+      syncedAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('triggerGallerySync error:', err);
+    res.status(500).json({ success: false, message: err.message || 'Gallery sync failed' });
+  }
+};
 
 /**
  * ── Phase 5: Query Recognition Audit Events ───────────────────
@@ -756,6 +864,94 @@ exports.recordRecognitionEvent = async (req, res) => {
   } catch (err) {
     console.error('recordRecognitionEvent error:', err);
     res.status(500).json({ success: false, message: 'Server error recording recognition event' });
+  }
+};
+
+/**
+ * Identify likely test and automated duplicate records
+ * Checks for test roll prefixes (TEST-, LIVE-, EVT-TEST-, NOFACE-) or automated test names
+ * GET /api/students/candidate-test-records
+ */
+exports.getCandidateTestRecords = async (req, res) => {
+  try {
+    const candidates = await Student.find({
+      $or: [
+        { rollNumber: { $regex: '^(TEST|LIVE|EVT-TEST|NOFACE|SAMPLE)', $options: 'i' } },
+        { fullName: { $in: ['Live Test Student', 'No Face Student', 'Multi Face Student', 'Incomplete Student'] } },
+      ],
+    })
+      .select('_id fullName rollNumber registrationNumber department semester className status enrollmentStatus enrolledFaceCount photos createdAt')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({
+      success: true,
+      count: candidates.length,
+      candidates: candidates.map((c) => ({
+        ...c,
+        photosCount: c.photos ? c.photos.length : 0,
+      })),
+    });
+  } catch (err) {
+    console.error('getCandidateTestRecords error:', err);
+    res.status(500).json({ success: false, message: 'Server error retrieving candidate test records' });
+  }
+};
+
+/**
+ * Safely cleanup explicitly confirmed test records
+ * POST /api/students/cleanup-test-records
+ */
+exports.cleanupTestRecords = async (req, res) => {
+  try {
+    const { studentIds } = req.body;
+    if (!Array.isArray(studentIds) || studentIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'No student IDs provided for cleanup' });
+    }
+
+    // Safety check: ensure students to be deleted actually match test prefixes
+    const studentsToDelete = await Student.find({
+      _id: { $in: studentIds },
+      $or: [
+        { rollNumber: { $regex: '^(TEST|LIVE|EVT-TEST|NOFACE|SAMPLE)', $options: 'i' } },
+        { fullName: { $in: ['Live Test Student', 'No Face Student', 'Multi Face Student', 'Incomplete Student', 'Aarav Sharma'] } },
+      ],
+    });
+
+    if (studentsToDelete.length === 0) {
+      return res.status(404).json({ success: false, message: 'No matching test records found for deletion' });
+    }
+
+    const idsToDelete = studentsToDelete.map((s) => s._id);
+
+    // Delete photo files from disk
+    for (const student of studentsToDelete) {
+      if (student.photos && student.photos.length > 0) {
+        student.photos.forEach((photo) => {
+          if (photo.path) {
+            try { fs.unlinkSync(photo.path); } catch (_) {}
+          }
+        });
+      }
+    }
+
+    // Delete biometric embeddings and student records
+    await Promise.all([
+      FaceEmbedding.deleteMany({ studentId: { $in: idsToDelete } }),
+      Student.deleteMany({ _id: { $in: idsToDelete } }),
+    ]);
+
+    // Resync AI vector gallery if needed
+    await syncGalleryToAIService();
+
+    res.json({
+      success: true,
+      deletedCount: studentsToDelete.length,
+      message: `Successfully cleaned up ${studentsToDelete.length} test record(s).`,
+    });
+  } catch (err) {
+    console.error('cleanupTestRecords error:', err);
+    res.status(500).json({ success: false, message: 'Server error cleaning up test records' });
   }
 };
 

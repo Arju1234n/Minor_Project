@@ -1,15 +1,13 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { dashboardAPI, cameraAPI } from '../services/api';
 import { getSocket } from '../services/webrtc';
 import {
   HiOutlineVideoCamera,
-  HiOutlineStatusOnline,
   HiOutlineUserGroup,
   HiOutlineLightningBolt,
   HiOutlineRefresh,
   HiOutlineEye,
-  HiOutlineExternalLink,
   HiOutlineBadgeCheck,
   HiOutlineTrendingUp,
 } from 'react-icons/hi';
@@ -271,7 +269,7 @@ export default function Dashboard() {
                     <div>
                       <span className="camera-item__name">{cam.name}</span>
                       <code className="camera-item__id">
-                        {cam.sessionId.slice(0, 10)}…
+                        {cam.type === 'cctv' ? '📹 CCTV' : '📱 Phone'} • {cam.sessionId.slice(0, 10)}…
                       </code>
                     </div>
                   </div>
@@ -292,6 +290,7 @@ export default function Dashboard() {
             </div>
           )}
         </div>
+
 
         {/* Real-time Live Detection Activity Feed */}
         <div className="glass-card animate-fade-in">

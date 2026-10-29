@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import {
   HiOutlineVideoCamera,
   HiOutlineSwitchHorizontal,
@@ -11,7 +11,6 @@ import {
   HiOutlineStop,
   HiOutlineClipboardCopy,
   HiOutlineLightningBolt,
-  HiOutlineUserGroup,
 } from 'react-icons/hi';
 import { getSocket, fetchIceServers, DEFAULT_ICE_SERVERS } from '../services/webrtc';
 import './MobileCamera.css';
@@ -28,11 +27,10 @@ import './MobileCamera.css';
  */
 export default function MobileCamera() {
   const { sessionId: paramSessionId } = useParams();
-  const navigate = useNavigate();
 
   // Session state
   const [sessionId, setSessionId] = useState(
-    paramSessionId || 'room_' + Math.random().toString(36).substring(2, 8)
+    () => paramSessionId || 'room_' + Math.random().toString(36).substring(2, 8)
   );
   const [copied, setCopied] = useState(false);
 
@@ -57,15 +55,15 @@ export default function MobileCamera() {
   // WebRTC & Peer Connection state
   const socketRef = useRef(null);
   const peerConnections = useRef(new Map()); // viewerId -> RTCPeerConnection
+  const pendingCandidatesByPeer = useRef(new Map()); // viewerId -> [candidates]
   const iceServersRef = useRef(DEFAULT_ICE_SERVERS);
   const [connectedViewers, setConnectedViewers] = useState(0);
-  const [webrtcStatus, setWebrtcStatus] = useState('idle'); // 'idle' | 'signaling' | 'broadcasting'
+  const [_webrtcStatus, setWebrtcStatus] = useState('idle'); // 'idle' | 'signaling' | 'broadcasting'
 
   // Check secure context on mount (getUserMedia requires HTTPS or localhost)
   useEffect(() => {
-    if (window.isSecureContext === false && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-      setIsSecureContext(false);
-    }
+    const isSecure = window.isSecureContext !== false || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    setIsSecureContext(isSecure);
   }, []);
 
   // Update session ID if URL parameter changes
@@ -187,12 +185,26 @@ export default function MobileCamera() {
     const socket = getSocket();
     socketRef.current = socket;
 
-    // Join room as broadcaster
-    socket.emit('join-session', {
-      sessionId,
-      role: 'broadcaster',
-      cameraName: 'Smartphone Camera Unit',
-    });
+    // Join room as broadcaster (and re-join whenever socket reconnects)
+    const registerBroadcaster = () => {
+      console.log(`📡 Registering broadcaster for session [${sessionId}]`);
+      socket.emit('join-session', {
+        sessionId,
+        role: 'broadcaster',
+        cameraName: 'Smartphone Camera Unit',
+      });
+      if (streamRef.current) {
+        socket.emit('broadcaster-stream-status', {
+          sessionId,
+          isStreaming: true,
+        });
+      }
+    };
+
+    if (socket.connected) {
+      registerBroadcaster();
+    }
+    socket.on('connect', registerBroadcaster);
 
     // Viewer joined — if we have active stream, start P2P negotiation
     const handleViewerJoined = ({ viewerId }) => {
@@ -227,6 +239,17 @@ export default function MobileCamera() {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(answer));
           console.log(`✅ Set remote description (answer) for viewer: ${from}`);
+
+          // Drain queued ICE candidates received before answer description was set
+          const queued = pendingCandidatesByPeer.current.get(from) || [];
+          while (queued.length > 0) {
+            const cand = queued.shift();
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(cand));
+            } catch (e) {
+              console.warn('Error adding queued ICE candidate on broadcaster:', e);
+            }
+          }
         } catch (err) {
           console.error('Failed to set remote description answer:', err);
         }
@@ -237,10 +260,17 @@ export default function MobileCamera() {
     const handleWebRTCIceCandidate = async ({ from, candidate }) => {
       const pc = peerConnections.current.get(from);
       if (pc && candidate) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
-        } catch (err) {
-          console.warn('Failed to add remote ICE candidate:', err);
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            console.warn('Failed to add remote ICE candidate:', err);
+          }
+        } else {
+          if (!pendingCandidatesByPeer.current.has(from)) {
+            pendingCandidatesByPeer.current.set(from, []);
+          }
+          pendingCandidatesByPeer.current.get(from).push(candidate);
         }
       }
     };
@@ -251,6 +281,7 @@ export default function MobileCamera() {
     socket.on('webrtc-ice-candidate', handleWebRTCIceCandidate);
 
     return () => {
+      socket.off('connect', registerBroadcaster);
       socket.off('viewer-joined', handleViewerJoined);
       socket.off('viewer-left', handleViewerLeft);
       socket.off('webrtc-answer', handleWebRTCAnswer);
@@ -333,8 +364,14 @@ export default function MobileCamera() {
     videoConstraints.frameRate = { ideal: 30 };
 
     try {
+      const isSecure = window.isSecureContext !== false || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (!isSecure) {
+        setIsSecureContext(false);
+        throw new Error('Insecure Origin: Mobile browsers prohibit camera access over unencrypted HTTP. Please connect via your secure HTTPS tunnel (e.g. ngrok).');
+      }
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('MediaDevices API not supported in this browser. Please ensure you are on HTTPS or localhost.');
+        throw new Error('MediaDevices API not supported in this browser. Please ensure you are using a modern browser (Safari on iOS, Chrome on Android) over HTTPS.');
       }
 
       let newStream;
@@ -375,13 +412,15 @@ export default function MobileCamera() {
       console.error('Camera access error:', err);
       let userFriendlyMsg = 'Could not access camera.';
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        userFriendlyMsg = 'Camera permission was denied. Please allow camera access in your browser site settings.';
+        userFriendlyMsg = 'Camera permission was denied. Please tap the lock or settings icon in your browser address bar to allow Camera access, then tap Retry.';
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         userFriendlyMsg = 'No camera device detected on this smartphone or computer.';
       } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
-        userFriendlyMsg = 'Camera is already in use by another application or browser tab.';
+        userFriendlyMsg = 'Camera is already in use by another application or background tab. Please close other camera apps and retry.';
       } else if (err.name === 'OverconstrainedError') {
         userFriendlyMsg = 'Requested camera resolution is not supported by your camera hardware.';
+      } else if (err.name === 'SecurityError') {
+        userFriendlyMsg = 'Security Error: Camera access was blocked by browser security. An HTTPS origin is required.';
       } else {
         userFriendlyMsg = err.message || userFriendlyMsg;
       }
@@ -556,11 +595,21 @@ export default function MobileCamera() {
 
         {/* Error Notification */}
         {errorMessage && (
-          <div className="mobile-camera-alert error animate-slide-up">
-            <HiOutlineExclamationCircle size={20} />
-            <div>
-              <strong>Camera Error:</strong> {errorMessage}
+          <div className="mobile-camera-alert error animate-slide-up" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1 }}>
+              <HiOutlineExclamationCircle size={20} style={{ flexShrink: 0 }} />
+              <div>
+                <strong>Camera Error:</strong> {errorMessage}
+              </div>
             </div>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              style={{ flexShrink: 0, padding: '4px 10px', fontSize: 12 }}
+              onClick={() => startCamera()}
+            >
+              <HiOutlineRefresh size={14} /> Retry
+            </button>
           </div>
         )}
 
