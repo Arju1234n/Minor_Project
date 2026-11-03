@@ -93,6 +93,9 @@ class SessionTracker:
         self.track_unseen_frames.clear()
         self.track_consecutive_no_faces.clear()
         self.frame_counter = 0
+        if hasattr(self.model, 'predictor') and self.model.predictor is not None:
+            if hasattr(self.model.predictor, 'trackers'):
+                self.model.predictor.trackers = []
 
     def update_tripwire_y(self, y: float):
         self.tripwire_y = max(0.05, min(0.95, y))
@@ -497,5 +500,8 @@ class TrackerRegistry:
         return self.trackers[session_id]
 
     def reset_session(self, session_id: str):
-        if session_id in self.trackers:
+        if session_id == "all":
+            for t in self.trackers.values():
+                t.reset()
+        elif session_id in self.trackers:
             self.trackers[session_id].reset()

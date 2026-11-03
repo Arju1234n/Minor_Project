@@ -107,6 +107,7 @@ export default function LiveMonitoring() {
   const [inferenceTimeMs, setInferenceTimeMs] = useState(0);
   const [aiServiceStatus, setAiServiceStatus] = useState('checking'); // 'online' | 'offline' | 'checking'
   const [activeDetections, setActiveDetections] = useState([]);
+  const [resetStatus, setResetStatus] = useState(false);
 
   // ── Hardware Acceleration & Telemetry State ──
   const [telemetry, setTelemetry] = useState({
@@ -287,20 +288,31 @@ export default function LiveMonitoring() {
    * Reset ByteTrack tracking state and counters for active session
    */
   const handleResetTracking = async () => {
-    if (!selectedSessionId) return;
+    const sid = selectedSessionId || 'default';
     try {
-      await aiAPI.resetSession(selectedSessionId);
+      setResetStatus(true);
+      await aiAPI.resetSession(sid);
+      if (sid !== 'default') {
+        try { await aiAPI.resetSession('default'); } catch (_) {}
+      }
+      activeDetectionsRef.current = [];
+      setActiveDetections([]);
+      setPeopleCount(0);
       setUniqueIdsCount(0);
       setTripwireEntered(0);
       setTripwireExited(0);
       setZoneCount(0);
-      setActiveDetections([]);
+      setRecognizedCount(0);
+      setUnrecognizedCount(0);
+      setRecognizedStudents([]);
       if (canvasRef.current) {
         const ctx = canvasRef.current.getContext('2d');
         ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
       }
+      setTimeout(() => setResetStatus(false), 2000);
     } catch (err) {
       console.warn('Failed to reset tracker:', err.message);
+      setResetStatus(false);
     }
   };
 
@@ -1968,12 +1980,13 @@ function getMediaDisplayRect(mediaEl, containerWidth, containerHeight) {
                 {/* Reset Tracking Session Button */}
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm btn-block"
-                  style={{ marginTop: '0.75rem' }}
+                  className={`btn btn-sm btn-block ${resetStatus ? 'btn-success' : 'btn-secondary'}`}
+                  style={{ marginTop: '0.75rem', transition: 'all 0.2s ease' }}
                   onClick={handleResetTracking}
                   title="Reset tracking IDs, trajectories, and tripwire counts"
                 >
-                  <HiOutlineRefresh size={14} /> Reset Session Tracking
+                  <HiOutlineRefresh size={14} className={resetStatus ? 'spin-icon' : ''} />
+                  {resetStatus ? ' ✓ Tracking Reset Complete' : ' Reset Session Tracking'}
                 </button>
               </div>
             )}
